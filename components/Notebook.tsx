@@ -117,6 +117,7 @@ const Notebook: React.FC<NotebookProps> = ({
                             onRun={onRunCell} 
                             onDelete={onDeleteCell}
                             onUpdate={onUpdateCell}
+                            onExport={onExport}
                         />
                     ))}
 

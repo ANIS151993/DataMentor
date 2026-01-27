@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { NotebookCell } from '../types';
-import { Play, Sparkles, Trash2, AlertCircle, Terminal, BarChart3, ChevronDown, ChevronUp, Bot } from 'lucide-react';
+import { Play, Sparkles, Trash2, AlertCircle, Terminal, BarChart3, ChevronDown, ChevronUp, Bot, Download, FileCheck } from 'lucide-react';
 import DataTable from './DataTable';
 import Copilot from './Copilot';
 
@@ -11,9 +11,10 @@ interface CellProps {
     onRun: (id: string) => void;
     onDelete: (id: string) => void;
     onUpdate: (id: string, content: string) => void;
+    onExport?: (format: 'csv' | 'xlsx') => void;
 }
 
-const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate }) => {
+const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, onExport }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [showOutput, setShowOutput] = useState(true);
     const [showCopilot, setShowCopilot] = useState(false);
@@ -112,6 +113,41 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate })
 
         try {
             const data = JSON.parse(cell.output!);
+            
+            // Special Export Readiness View
+            if (data.type === 'export_ready') {
+                return (
+                    <div className="mt-4 p-8 bg-indigo-600 rounded-2xl shadow-xl text-white flex flex-col items-center text-center animate-in fade-in zoom-in duration-500">
+                        <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mb-4">
+                            <FileCheck className="w-8 h-8 text-white" />
+                        </div>
+                        <h3 className="text-xl font-bold mb-2">Dataset Ready for Export</h3>
+                        <p className="text-indigo-100 text-sm mb-6 max-w-sm">
+                            {data.message || "Your cleaning workflow is finished. You can now download the final polished file."}
+                        </p>
+                        <div className="flex items-center gap-6 mb-8 text-xs font-bold uppercase tracking-widest opacity-80">
+                            <div>Rows: {data.rows}</div>
+                            <div className="w-px h-3 bg-white/30" />
+                            <div>Cols: {data.cols}</div>
+                        </div>
+                        <div className="flex flex-wrap justify-center gap-4">
+                            <button 
+                                onClick={() => onExport?.('csv')}
+                                className="flex items-center gap-2 px-6 py-3 bg-white text-indigo-600 rounded-xl font-bold hover:bg-indigo-50 transition-all shadow-lg shadow-indigo-900/20"
+                            >
+                                <Download className="w-4 h-4" /> DOWNLOAD CSV
+                            </button>
+                            <button 
+                                onClick={() => onExport?.('xlsx')}
+                                className="flex items-center gap-2 px-6 py-3 bg-indigo-500 text-white border border-indigo-400 rounded-xl font-bold hover:bg-indigo-400 transition-all shadow-lg shadow-indigo-900/20"
+                            >
+                                <Download className="w-4 h-4" /> DOWNLOAD EXCEL
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
             if (data.chart_type && data.data) {
                 return (
                     <div className="mt-4 p-6 bg-white border border-slate-100 rounded-xl shadow-inner">

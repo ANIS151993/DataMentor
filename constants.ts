@@ -11,7 +11,13 @@ STRICT WORKFLOW REQUIREMENTS (You MUST provide exactly 10 steps in this order):
 6. Row 6: Parse Ranges - Detect range strings (e.g. "10-20", "$5k - $10k") and convert to numeric averages.
 7. Row 7: Normalize numeric and binary fields - Cast numeric IDs and handle Yes/No or True/False normalization.
 8. Row 8: Remove duplicates - Identify and drop exact duplicate rows.
-9. Row 9: Final summary and export - Print final stats, row/col counts, and save to 'export.csv'.
+9. Row 9: Final summary and export - Print final stats, row/col counts. 
+   The code MUST print a JSON string using json.dumps(). 
+   The JSON structure MUST be exactly: {"type": "export_ready", "message": "Cleaning complete.", "rows": X, "cols": Y}.
+   Example:
+   import json
+   print(json.dumps({"type": "export_ready", "message": "Successfully processed all steps.", "rows": len(df), "cols": len(df.columns)}))
+
 10. Row 10: Visualization ideas - The code MUST calculate a distribution (e.g., using value_counts()) and PRINT a JSON string using json.dumps(). 
     The JSON structure MUST be exactly: {"chart_type": "bar" | "pie" | "line", "label": "Display Title", "data": {"Category": Value, ...}}.
 
