@@ -2,12 +2,13 @@
 import React, { useState } from 'react';
 import { NotebookCell, Project } from '../types';
 import Cell from './Cell';
-import { Plus, Wand2, Download, Save, Loader2, Sparkles, BrainCircuit } from 'lucide-react';
+import { Plus, Download, Save, Loader2, Sparkles, BrainCircuit } from 'lucide-react';
 
 interface NotebookProps {
     project: Project;
     isInitializing: boolean;
     isSuggesting: boolean;
+    summary: any;
     onUpdateCell: (id: string, content: string) => void;
     onRunCell: (id: string) => void;
     onDeleteCell: (id: string) => void;
@@ -18,7 +19,7 @@ interface NotebookProps {
 }
 
 const Notebook: React.FC<NotebookProps> = ({ 
-    project, isInitializing, isSuggesting, onUpdateCell, onRunCell, onDeleteCell, onAddCell, onGetSuggestion, onExport, onSave 
+    project, isInitializing, isSuggesting, summary, onUpdateCell, onRunCell, onDeleteCell, onAddCell, onGetSuggestion, onExport, onSave 
 }) => {
     const [exportMenu, setExportMenu] = useState(false);
 
@@ -112,6 +113,7 @@ const Notebook: React.FC<NotebookProps> = ({
                         <Cell 
                             key={cell.id} 
                             cell={cell} 
+                            summary={summary}
                             onRun={onRunCell} 
                             onDelete={onDeleteCell}
                             onUpdate={onUpdateCell}

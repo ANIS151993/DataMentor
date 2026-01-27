@@ -13,6 +13,12 @@ export interface CleaningPlan {
     steps: CleaningStep[];
 }
 
+export interface ChatMessage {
+    role: 'user' | 'model';
+    text: string;
+    suggestedCode?: string;
+}
+
 class GeminiService {
   private ai: GoogleGenAI | null = null;
 
@@ -63,6 +69,64 @@ class GeminiService {
         console.warn("AI generated plan with unexpected number of steps:", result.steps.length);
     }
     return result;
+  }
+
+  async solveError(code: string, error: string, summary: any, chatHistory: ChatMessage[]): Promise<ChatMessage> {
+    if (!this.ai) this.init();
+
+    const systemInstruction = `You are a world-class Python/Pandas debugging assistant (Copilot). 
+    The user is encountering an error in their notebook cell.
+    Analyze the code, the error message, and the dataset summary.
+    Provide a clear explanation of what went wrong and suggest corrected code.
+    
+    Respond in JSON format:
+    {
+      "explanation": "Brief explanation of the bug...",
+      "suggestedCode": "The complete fixed python code..."
+    }`;
+
+    const contents = [
+      {
+        role: 'user',
+        parts: [{ text: `
+          CODE:
+          ${code}
+          
+          ERROR:
+          ${error}
+          
+          DATASET CONTEXT:
+          ${JSON.stringify(summary, null, 2)}
+          
+          CHAT HISTORY:
+          ${JSON.stringify(chatHistory)}
+        `}]
+      }
+    ];
+
+    const response = await this.ai!.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            explanation: { type: Type.STRING },
+            suggestedCode: { type: Type.STRING }
+          },
+          required: ["explanation", "suggestedCode"]
+        }
+      }
+    });
+
+    const data = JSON.parse(response.text);
+    return {
+      role: 'model',
+      text: data.explanation,
+      suggestedCode: data.suggestedCode
+    };
   }
 }
 

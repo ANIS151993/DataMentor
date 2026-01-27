@@ -230,6 +230,7 @@ const App: React.FC = () => {
                                 project={activeProject}
                                 isInitializing={!isEngineReady}
                                 isSuggesting={isSuggesting}
+                                summary={summary}
                                 onUpdateCell={(id, content) => {
                                     const cells = activeProject.cells.map(c => c.id === id ? { ...c, content } : c);
                                     setActiveProject({ ...activeProject, cells });

@@ -1,24 +1,35 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { NotebookCell } from '../types';
-import { Play, Sparkles, Trash2, CheckCircle2, AlertCircle, Terminal, FileCode, BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Sparkles, Trash2, AlertCircle, Terminal, BarChart3, ChevronDown, ChevronUp, Bot } from 'lucide-react';
 import DataTable from './DataTable';
+import Copilot from './Copilot';
 
 interface CellProps {
     cell: NotebookCell;
+    summary: any;
     onRun: (id: string) => void;
     onDelete: (id: string) => void;
     onUpdate: (id: string, content: string) => void;
 }
 
-const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
+const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [showOutput, setShowOutput] = useState(true);
+    const [showCopilot, setShowCopilot] = useState(false);
     const chartRef = useRef<HTMLCanvasElement>(null);
     const chartInstance = useRef<any>(null);
 
+    // Automatically show Copilot when an error appears
     useEffect(() => {
-        // Handle Chart.js rendering for Row 10 outputs
+        if (cell.error) {
+            setShowCopilot(true);
+        } else {
+            setShowCopilot(false);
+        }
+    }, [cell.error]);
+
+    useEffect(() => {
         if (cell.type === 'code' && cell.output && chartRef.current) {
             try {
                 const data = JSON.parse(cell.output);
@@ -26,7 +37,7 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
                     if (chartInstance.current) {
                         chartInstance.current.destroy();
                     }
-                    // @ts-ignore (Chart is global from index.html)
+                    // @ts-ignore
                     chartInstance.current = new Chart(chartRef.current, {
                         type: data.chart_type,
                         data: {
@@ -54,9 +65,7 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
                         }
                     });
                 }
-            } catch (e) {
-                // Not a chart JSON, ignore
-            }
+            } catch (e) {}
         }
     }, [cell.output]);
 
@@ -65,17 +74,44 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
 
         if (cell.error) {
             return (
-                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-xs font-mono flex items-start gap-3">
-                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                    <pre className="whitespace-pre-wrap">{cell.error}</pre>
+                <div className="mt-4 space-y-4">
+                    <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-xs font-mono flex items-start gap-3 shadow-sm relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-1 h-full bg-red-500"></div>
+                        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                        <div className="flex-1">
+                            <div className="font-bold mb-1 uppercase tracking-wider flex items-center justify-between">
+                                <span>Execution Error</span>
+                                {!showCopilot && (
+                                    <button 
+                                        onClick={() => setShowCopilot(true)}
+                                        className="text-[10px] flex items-center gap-1.5 px-2 py-0.5 bg-white border border-red-200 rounded hover:bg-red-500 hover:text-white transition-all shadow-sm"
+                                    >
+                                        <Bot className="w-3 h-3" /> ASK COPILOT
+                                    </button>
+                                )}
+                            </div>
+                            <pre className="whitespace-pre-wrap">{cell.error}</pre>
+                        </div>
+                    </div>
+                    
+                    {showCopilot && (
+                        <Copilot 
+                            code={cell.content} 
+                            error={cell.error} 
+                            summary={summary}
+                            onApplyFix={(newCode) => {
+                                onUpdate(cell.id, newCode);
+                                setShowCopilot(false);
+                            }}
+                            onClose={() => setShowCopilot(false)}
+                        />
+                    )}
                 </div>
             );
         }
 
         try {
             const data = JSON.parse(cell.output!);
-            
-            // Check if it's a chart config
             if (data.chart_type && data.data) {
                 return (
                     <div className="mt-4 p-6 bg-white border border-slate-100 rounded-xl shadow-inner">
@@ -91,13 +127,10 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
                     </div>
                 );
             }
-
-            // Otherwise treat as Table data (Pyodide split orient)
             if (data.columns && data.data) {
                 return <div className="mt-4"><DataTable data={data} /></div>;
             }
         } catch (e) {
-            // Treat as raw text/stdout
             return (
                 <div className="mt-4 p-4 bg-slate-900 rounded-xl text-indigo-300 text-xs font-mono overflow-x-auto shadow-xl">
                     <pre className="whitespace-pre-wrap">{cell.output}</pre>
@@ -107,8 +140,7 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
     };
 
     return (
-        <div className={`group relative rounded-2xl border transition-all duration-300 ${cell.type === 'code' ? 'bg-white border-slate-200 hover:border-indigo-300' : 'bg-transparent border-transparent'}`}>
-            {/* Cell Actions Overlay */}
+        <div className={`group relative rounded-2xl border transition-all duration-300 ${cell.type === 'code' ? 'bg-white border-slate-200 hover:border-indigo-300 shadow-sm hover:shadow-md' : 'bg-transparent border-transparent'}`}>
             <div className="absolute right-4 top-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                 {cell.type === 'code' && (
                     <button 
@@ -137,11 +169,9 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
                         onBlur={() => setTimeout(() => setIsEditing(false), 200)}
                         placeholder="Add some documentation or analysis notes..."
                     />
-                    {/* Rendered markdown preview when not focused could go here */}
                 </div>
             ) : (
                 <div className="flex flex-col">
-                    {/* Code Editor Header */}
                     <div className="px-4 py-2 border-b border-slate-50 flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-50/50 rounded-t-2xl">
                         <div className="flex items-center gap-2">
                             {cell.metadata?.isAI ? <Sparkles className="w-3 h-3 text-indigo-500" /> : <Terminal className="w-3 h-3" />}
@@ -155,7 +185,6 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
                         )}
                     </div>
                     
-                    {/* Code Editor Area */}
                     <div className="p-4 bg-slate-50/30">
                         <textarea
                             className="w-full bg-transparent code-font text-sm text-slate-800 outline-none resize-none min-h-[80px]"
@@ -169,8 +198,6 @@ const Cell: React.FC<CellProps> = ({ cell, onRun, onDelete, onUpdate }) => {
                             }}
                         />
                     </div>
-
-                    {/* Output Area */}
                     {showOutput && renderOutput()}
                 </div>
             )}
