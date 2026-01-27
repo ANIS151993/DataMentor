@@ -1,0 +1,5 @@
+{
+  "name": "DataMentor AI Notebook",
+  "description": "A Jupyter-like data cleaning tool powered by Pyodide and Gemini AI, supporting local-only data processing and intelligent pandas guidance.",
+  "requestFramePermissions": []
+}
