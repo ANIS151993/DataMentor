@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { X, Filter, RefreshCcw, LayoutDashboard, Database, TrendingUp, PieChart as PieChartIcon, BarChart3 } from 'lucide-react';
+import { X, Filter, RefreshCcw, LayoutDashboard, Database, TrendingUp, PieChart as PieChartIcon, BarChart3, Zap } from 'lucide-react';
 
 interface DashboardProps {
     filename: string;
@@ -130,14 +130,16 @@ const Dashboard: React.FC<DashboardProps> = ({ filename, data, onClose }) => {
             {/* Header */}
             <header className="h-16 border-b border-slate-200 bg-white flex items-center justify-between px-6 shrink-0 shadow-sm">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
-                        <LayoutDashboard className="w-6 h-6" />
+                    <div className="relative w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200 overflow-hidden">
+                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(255,255,255,0.3),transparent)]" />
+                         <LayoutDashboard className="w-6 h-6 relative z-10" />
+                         <Zap className="absolute top-0 right-0 w-3 h-3 text-yellow-300 animate-pulse" />
                     </div>
                     <div>
                         <h1 className="text-lg font-bold text-slate-800 leading-tight">
-                            {filename} <span className="text-slate-400 font-normal">| Chart.js Proof of Concept</span>
+                            {filename} <span className="text-slate-400 font-normal">| Insights Engine POC</span>
                         </h1>
-                        <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Insights Engine POC</p>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Chart.js Visualization Core</p>
                     </div>
                 </div>
                 <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-800">

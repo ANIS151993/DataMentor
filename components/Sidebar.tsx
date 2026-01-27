@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Project, DatasetMetadata } from '../types';
 import { storage, CloudFile } from '../services/storageService';
-import { FileText, Plus, Trash2, FolderOpen, Database, BarChart3, Cloud, HardDrive, Loader2, RefreshCw } from 'lucide-react';
+import { FileText, Plus, Trash2, FolderOpen, Database, BarChart3, Cloud, HardDrive, Loader2, RefreshCw, Zap } from 'lucide-react';
 
 interface SidebarProps {
     projects: Project[];
@@ -12,6 +12,14 @@ interface SidebarProps {
     onNewProject: () => void;
     summary: any;
 }
+
+const Logo = () => (
+    <div className="relative flex items-center justify-center w-10 h-10 bg-gradient-to-tr from-indigo-600 to-violet-500 rounded-xl shadow-lg shadow-indigo-200 overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(255,255,255,0.3),transparent)]" />
+        <Database className="w-6 h-6 text-white relative z-10" />
+        <Zap className="absolute top-1 right-1 w-3 h-3 text-yellow-300 animate-pulse" />
+    </div>
+);
 
 const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectProject, onDeleteProject, onNewProject, summary }) => {
     const [view, setView] = useState<'files' | 'explorer' | 'cloud'>('files');
@@ -49,10 +57,12 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
     return (
         <aside className="w-80 flex flex-col border-r border-slate-200 h-screen bg-white">
             <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50/50">
-                <h1 className="font-black text-slate-800 flex items-center gap-2 italic text-lg tracking-tight">
-                    <Database className="w-6 h-6 text-indigo-600" />
-                    DataMentor
-                </h1>
+                <div className="flex items-center gap-3">
+                    <Logo />
+                    <h1 className="font-black text-slate-800 italic text-lg tracking-tight">
+                        DataMentor
+                    </h1>
+                </div>
                 <button 
                     onClick={onNewProject}
                     className="p-2 hover:bg-slate-200 rounded-xl transition-all text-indigo-600 bg-indigo-50"
@@ -201,8 +211,13 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
                 )}
             </div>
 
-            <div className="p-5 bg-slate-50 border-t border-slate-200 text-[9px] text-slate-400 text-center font-black uppercase tracking-widest flex items-center justify-center gap-2">
-                <Database className="w-3 h-3" /> Core: 2.5 Pro Engine
+            <div className="p-5 bg-slate-50 border-t border-slate-200 text-center space-y-1">
+                <div className="text-[9px] text-slate-400 font-black uppercase tracking-widest flex items-center justify-center gap-2">
+                    <Database className="w-3 h-3" /> Core: 2.5 Pro Engine
+                </div>
+                <div className="text-[8px] text-slate-300 font-bold uppercase tracking-tighter">
+                    © {new Date().getFullYear()} Md Anisur Rahman Chowdhury
+                </div>
             </div>
         </aside>
     );

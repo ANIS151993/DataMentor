@@ -1,11 +1,18 @@
 
 import React, { useState } from 'react';
-import { Database, ShieldCheck, Mail, Lock, Loader2 } from 'lucide-react';
+import { Database, ShieldCheck, Mail, Lock, Loader2, Zap } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 
 interface AuthProps {
     onAuthSuccess: (user: any) => void;
 }
+
+const Logo = () => (
+    <div className="relative flex items-center justify-center w-20 h-20 bg-white/20 rounded-3xl mx-auto mb-6 backdrop-blur-md border border-white/30 shadow-2xl">
+        <Database className="w-10 h-10 text-white" />
+        <Zap className="absolute -top-1 -right-1 w-6 h-6 text-yellow-300 animate-pulse drop-shadow-md" />
+    </div>
+);
 
 const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     const [isLogin, setIsLogin] = useState(true);
@@ -49,12 +56,10 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             </div>
 
             <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden relative z-10">
-                <div className="bg-indigo-600 p-8 text-white text-center">
-                    <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
-                        <Database className="w-8 h-8 text-white" />
-                    </div>
-                    <h1 className="text-2xl font-bold">DataMentor AI</h1>
-                    <p className="text-indigo-100 text-sm mt-1">Cloud-Powered Pandas Lab</p>
+                <div className="bg-indigo-600 p-10 text-white text-center">
+                    <Logo />
+                    <h1 className="text-3xl font-black italic tracking-tighter">DataMentor AI</h1>
+                    <p className="text-indigo-100 text-sm mt-1 font-medium">Cloud-Powered Pandas Lab</p>
                 </div>
 
                 <div className="p-8">
@@ -120,8 +125,11 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
                     </form>
 
                     <div className="mt-8 pt-6 border-t border-slate-100 text-center">
-                        <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center justify-center gap-2">
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center justify-center gap-2 mb-2">
                             <ShieldCheck className="w-3 h-3" /> Supabase Managed Auth
+                        </p>
+                        <p className="text-[8px] text-slate-300 font-bold uppercase tracking-widest">
+                            © {new Date().getFullYear()} Md Anisur Rahman Chowdhury
                         </p>
                     </div>
                 </div>
