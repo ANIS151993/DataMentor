@@ -4,6 +4,7 @@ import { User, Project, NotebookCell } from './types';
 import Auth from './components/Auth';
 import Sidebar from './components/Sidebar';
 import Notebook from './components/Notebook';
+import Dashboard from './components/Dashboard';
 import { storage } from './services/storageService';
 import { pyEngine } from './services/pyodideService';
 import { aiMentor } from './services/geminiService';
@@ -17,6 +18,8 @@ const App: React.FC = () => {
     const [isSuggesting, setIsSuggesting] = useState(false);
     const [summary, setSummary] = useState<any>(null);
     const [showUpload, setShowUpload] = useState(false);
+    const [showDashboard, setShowDashboard] = useState(false);
+    const [dashboardData, setDashboardData] = useState<any[]>([]);
 
     // Secure local-only hashing
     const hashPassword = async (password: string) => {
@@ -105,13 +108,15 @@ const App: React.FC = () => {
         const codeLines = cell.content.trim().split('\n');
         const lastLine = codeLines[codeLines.length - 1];
 
-        // Advanced detection for JSON Chart output
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
         let capturedChart = false;
         if (jsonMatch) {
             try {
                 const potentialJson = JSON.parse(jsonMatch[0]);
                 if (potentialJson.chart_type && potentialJson.data) {
+                    finalOutput = jsonMatch[0];
+                    capturedChart = true;
+                } else if (potentialJson.type === 'export_ready') {
                     finalOutput = jsonMatch[0];
                     capturedChart = true;
                 }
@@ -168,6 +173,13 @@ const App: React.FC = () => {
         const newCell: NotebookCell = { id: `cell_${Date.now()}`, type, content: '', isExecuting: false };
         const updated = { ...activeProject, cells: [...activeProject.cells, newCell] };
         setActiveProject(updated);
+    };
+
+    const handleOpenDashboard = async () => {
+        if (!activeProject) return;
+        const data = await pyEngine.getFullData();
+        setDashboardData(data);
+        setShowDashboard(true);
     };
 
     return (
@@ -252,6 +264,7 @@ const App: React.FC = () => {
                                     a.click();
                                 }}
                                 onSave={() => storage.saveProject(activeProject)}
+                                onOpenDashboard={handleOpenDashboard}
                             />
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center h-full text-slate-400">
@@ -266,6 +279,14 @@ const App: React.FC = () => {
                             <LogOut className="w-5 h-5" />
                         </button>
                     </main>
+
+                    {showDashboard && activeProject && (
+                        <Dashboard 
+                            filename={activeProject.name} 
+                            data={dashboardData} 
+                            onClose={() => setShowDashboard(false)} 
+                        />
+                    )}
                 </>
             )}
         </div>

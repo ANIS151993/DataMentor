@@ -11,16 +11,13 @@ class PyodideService {
     try {
       // @ts-ignore
       this.pyodide = await loadPyodide();
-      // Load pandas (core) and micropip (to install pure python packages)
       await this.pyodide.loadPackage(['pandas', 'micropip']);
       
-      // Install openpyxl via micropip for Excel support
       await this.pyodide.runPythonAsync(`
         import micropip
         await micropip.install('openpyxl')
       `);
       
-      // Initialize our helper functions
       await this.pyodide.runPythonAsync(PYODIDE_INIT_CODE);
       this.isLoaded = true;
     } catch (err) {
@@ -46,7 +43,6 @@ class PyodideService {
 
   async runCode(code: string): Promise<{ result: any; stdout: string; error?: string }> {
     try {
-      // Capture stdout
       await this.pyodide.runPythonAsync(`
 import sys
 import io
@@ -65,6 +61,11 @@ sys.stdout = io.StringIO()
   async getDatasetSummary() {
       const summaryJson = await this.pyodide.runPythonAsync('json.dumps(get_df_summary(df))');
       return JSON.parse(summaryJson);
+  }
+
+  async getFullData(): Promise<any[]> {
+      const jsonStr = await this.pyodide.runPythonAsync('df.to_json(orient="records")');
+      return JSON.parse(jsonStr);
   }
 
   async exportData(format: 'csv' | 'xlsx'): Promise<Uint8Array> {

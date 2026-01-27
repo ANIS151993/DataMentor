@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { NotebookCell, Project } from '../types';
 import Cell from './Cell';
-import { Plus, Download, Save, Loader2, Sparkles, BrainCircuit } from 'lucide-react';
+import { Plus, Download, Save, Loader2, Sparkles, BrainCircuit, LayoutDashboard } from 'lucide-react';
 
 interface NotebookProps {
     project: Project;
@@ -16,10 +16,11 @@ interface NotebookProps {
     onGetSuggestion: () => void;
     onExport: (format: 'csv' | 'xlsx') => void;
     onSave: () => void;
+    onOpenDashboard: () => void;
 }
 
 const Notebook: React.FC<NotebookProps> = ({ 
-    project, isInitializing, isSuggesting, summary, onUpdateCell, onRunCell, onDeleteCell, onAddCell, onGetSuggestion, onExport, onSave 
+    project, isInitializing, isSuggesting, summary, onUpdateCell, onRunCell, onDeleteCell, onAddCell, onGetSuggestion, onExport, onSave, onOpenDashboard
 }) => {
     const [exportMenu, setExportMenu] = useState(false);
 
@@ -47,6 +48,16 @@ const Notebook: React.FC<NotebookProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2">
+                    <button 
+                        onClick={onOpenDashboard}
+                        className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 font-semibold text-xs transition-all shadow-sm"
+                    >
+                        <LayoutDashboard className="w-3.5 h-3.5 text-indigo-600" />
+                        Open Chart.js Proof of Concept
+                    </button>
+
+                    <div className="w-px h-6 bg-slate-200 mx-1" />
+
                     <button 
                         onClick={onGetSuggestion}
                         disabled={isSuggesting}
