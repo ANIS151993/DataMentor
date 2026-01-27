@@ -14,7 +14,7 @@ const Dashboard: React.FC<DashboardProps> = ({ filename, data, onClose }) => {
     const chartInstances = useRef<Record<string, any>>({});
 
     const categoricalCols = useMemo(() => {
-        if (!data.length) return [];
+        if (!data || !data.length || !data[0]) return [];
         return Object.keys(data[0]).filter(col => {
             const val = data[0][col];
             return typeof val === 'string' || typeof val === 'boolean';
@@ -24,7 +24,6 @@ const Dashboard: React.FC<DashboardProps> = ({ filename, data, onClose }) => {
     const filterOptions = useMemo(() => {
         const options: Record<string, string[]> = {};
         categoricalCols.forEach(col => {
-            // Fix: Cast to string[] to resolve 'unknown[]' not assignable to 'string[]' error
             options[col] = Array.from(new Set(data.map(d => String(d[col])))).filter(v => v !== 'null' && v !== 'undefined') as string[];
         });
         return options;
@@ -42,8 +41,9 @@ const Dashboard: React.FC<DashboardProps> = ({ filename, data, onClose }) => {
     const resetFilters = () => setFilters({});
 
     useEffect(() => {
+        if (!data || data.length === 0 || !data[0]) return;
+
         // Cleanup existing charts
-        // Fix: Cast chart to any to allow calling destroy() on potentially unknown types
         Object.values(chartInstances.current).forEach(chart => (chart as any)?.destroy());
         chartInstances.current = {};
 
@@ -92,18 +92,24 @@ const Dashboard: React.FC<DashboardProps> = ({ filename, data, onClose }) => {
 
         // 1. Fraud vs Legit (Mocking 'fraudulent' column if exists, or just first categorical)
         const fraudCol = Object.keys(data[0]).find(k => k.toLowerCase().includes('fraud')) || categoricalCols[0];
-        const fraudData = counts(fraudCol);
-        createChart('fraud', 'doughnut', fraudData.map(d => d[0]), fraudData.map(d => d[1]), `Distribution: ${fraudCol}`);
+        if (fraudCol) {
+            const fraudData = counts(fraudCol);
+            createChart('fraud', 'doughnut', fraudData.map(d => d[0]), fraudData.map(d => d[1]), `Distribution: ${fraudCol}`);
+        }
 
         // 2. Top Industries (Mocking 'industry' or second categorical)
         const indCol = Object.keys(data[0]).find(k => k.toLowerCase().includes('indus')) || categoricalCols[1];
-        const indData = counts(indCol);
-        createChart('industries', 'bar', indData.map(d => d[0]), indData.map(d => d[1]), `Top Categories: ${indCol}`, { indexAxis: 'y' });
+        if (indCol) {
+            const indData = counts(indCol);
+            createChart('industries', 'bar', indData.map(d => d[0]), indData.map(d => d[1]), `Top Categories: ${indCol}`, { indexAxis: 'y' });
+        }
 
         // 3. Employment Type
         const empCol = Object.keys(data[0]).find(k => k.toLowerCase().includes('employ')) || categoricalCols[2];
-        const empData = counts(empCol);
-        createChart('employment', 'bar', empData.map(d => d[0]), empData.map(d => d[1]), `${empCol} Analysis`);
+        if (empCol) {
+            const empData = counts(empCol);
+            createChart('employment', 'bar', empData.map(d => d[0]), empData.map(d => d[1]), `${empCol} Analysis`);
+        }
 
         // 4. Missingness Simulation
         const missingLabels = Object.keys(data[0]).slice(0, 8);
@@ -112,10 +118,12 @@ const Dashboard: React.FC<DashboardProps> = ({ filename, data, onClose }) => {
 
         // 5. Telecommuting
         const teleCol = Object.keys(data[0]).find(k => k.toLowerCase().includes('tele')) || categoricalCols[3];
-        const teleData = counts(teleCol);
-        createChart('telecommuting', 'pie', teleData.map(d => d[0]), teleData.map(d => d[1]), `${teleCol} Breakdown`);
+        if (teleCol) {
+            const teleData = counts(teleCol);
+            createChart('telecommuting', 'pie', teleData.map(d => d[0]), teleData.map(d => d[1]), `${teleCol} Breakdown`);
+        }
 
-    }, [filteredData]);
+    }, [filteredData, data, categoricalCols]);
 
     return (
         <div className="fixed inset-0 z-[100] bg-slate-50 flex flex-col animate-in fade-in duration-300">
@@ -181,57 +189,64 @@ const Dashboard: React.FC<DashboardProps> = ({ filename, data, onClose }) => {
 
                 {/* Main Dashboard Area */}
                 <main className="flex-1 p-8 overflow-y-auto bg-slate-50/50">
-                    <div className="max-w-6xl mx-auto space-y-8">
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {/* Key Stats */}
-                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
-                                <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center">
-                                    <TrendingUp className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <div className="text-2xl font-bold text-slate-800">{filteredData.length}</div>
-                                    <div className="text-xs font-medium text-slate-400">Total Samples</div>
-                                </div>
-                            </div>
-                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
-                                <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center">
-                                    <BarChart3 className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <div className="text-2xl font-bold text-slate-800">{Object.keys(data[0] || {}).length}</div>
-                                    <div className="text-xs font-medium text-slate-400">Cleaned Columns</div>
-                                </div>
-                            </div>
-                            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
-                                <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center">
-                                    <PieChartIcon className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <div className="text-2xl font-bold text-slate-800">{Math.round((filteredData.length / data.length) * 100)}%</div>
-                                    <div className="text-xs font-medium text-slate-400">Filter Coverage</div>
-                                </div>
-                            </div>
+                    {data.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                            <Database className="w-16 h-16 mb-4 opacity-10 animate-pulse" />
+                            <p className="text-lg font-medium">Loading analysis data...</p>
                         </div>
+                    ) : (
+                        <div className="max-w-6xl mx-auto space-y-8">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {/* Key Stats */}
+                                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
+                                    <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center">
+                                        <TrendingUp className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <div className="text-2xl font-bold text-slate-800">{filteredData.length}</div>
+                                        <div className="text-xs font-medium text-slate-400">Total Samples</div>
+                                    </div>
+                                </div>
+                                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
+                                    <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center">
+                                        <BarChart3 className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <div className="text-2xl font-bold text-slate-800">{Object.keys(data[0] || {}).length}</div>
+                                        <div className="text-xs font-medium text-slate-400">Cleaned Columns</div>
+                                    </div>
+                                </div>
+                                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
+                                    <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center">
+                                        <PieChartIcon className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <div className="text-2xl font-bold text-slate-800">{data.length > 0 ? Math.round((filteredData.length / data.length) * 100) : 0}%</div>
+                                        <div className="text-xs font-medium text-slate-400">Filter Coverage</div>
+                                    </div>
+                                </div>
+                            </div>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                            {/* Charts */}
-                            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
-                                <canvas ref={el => chartRefs.current.fraud = el}></canvas>
-                            </div>
-                            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
-                                <canvas ref={el => chartRefs.current.industries = el}></canvas>
-                            </div>
-                            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
-                                <canvas ref={el => chartRefs.current.employment = el}></canvas>
-                            </div>
-                            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
-                                <canvas ref={el => chartRefs.current.missingness = el}></canvas>
-                            </div>
-                            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px] lg:col-span-2">
-                                <canvas ref={el => chartRefs.current.telecommuting = el}></canvas>
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                {/* Charts */}
+                                <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
+                                    <canvas ref={el => chartRefs.current.fraud = el}></canvas>
+                                </div>
+                                <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
+                                    <canvas ref={el => chartRefs.current.industries = el}></canvas>
+                                </div>
+                                <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
+                                    <canvas ref={el => chartRefs.current.employment = el}></canvas>
+                                </div>
+                                <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px]">
+                                    <canvas ref={el => chartRefs.current.missingness = el}></canvas>
+                                </div>
+                                <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm h-[400px] lg:col-span-2">
+                                    <canvas ref={el => chartRefs.current.telecommuting = el}></canvas>
+                                </div>
                             </div>
                         </div>
-                    </div>
+                    )}
                 </main>
             </div>
         </div>

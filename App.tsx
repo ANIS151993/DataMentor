@@ -5,10 +5,11 @@ import Auth from './components/Auth';
 import Sidebar from './components/Sidebar';
 import Notebook from './components/Notebook';
 import Dashboard from './components/Dashboard';
-import { storage } from './services/storageService';
+import { storage, DatasetRecoveryResult } from './services/storageService';
 import { pyEngine } from './services/pyodideService';
 import { aiMentor } from './services/geminiService';
-import { LogOut, Upload, FileText } from 'lucide-react';
+import { supabase } from './services/supabaseClient';
+import { LogOut, Upload, FileText, Loader2, Sparkles, Database, CloudOff, AlertTriangle, RefreshCw, X } from 'lucide-react';
 
 const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
@@ -16,23 +17,25 @@ const App: React.FC = () => {
     const [activeProject, setActiveProject] = useState<Project | null>(null);
     const [isEngineReady, setIsEngineReady] = useState(false);
     const [isSuggesting, setIsSuggesting] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
     const [summary, setSummary] = useState<any>(null);
     const [showUpload, setShowUpload] = useState(false);
     const [showDashboard, setShowDashboard] = useState(false);
     const [dashboardData, setDashboardData] = useState<any[]>([]);
-
-    // Secure local-only hashing
-    const hashPassword = async (password: string) => {
-        const msgUint8 = new TextEncoder().encode(password);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-        return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-    };
+    const [autoProgressMsg, setAutoProgressMsg] = useState('');
+    const [isLocalMode, setIsLocalMode] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [isFixingMissingFile, setIsFixingMissingFile] = useState(false);
 
     useEffect(() => {
         const init = async () => {
-            await storage.init();
-            const storedUser = localStorage.getItem('dataMentor_user');
-            if (storedUser) setUser(JSON.parse(storedUser));
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user) setUser({ email: session.user.email!, id: session.user.id });
+            const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+                if (session?.user) setUser({ email: session.user.email!, id: session.user.id });
+                else { setUser(null); setActiveProject(null); setProjects([]); }
+            });
+            return () => subscription.unsubscribe();
         };
         init();
     }, []);
@@ -46,53 +49,161 @@ const App: React.FC = () => {
         if (user) loadProjects();
     }, [user, loadProjects]);
 
-    const startEngineForProject = async (project: Project) => {
+    const startEngineForProject = async (project: Project, isNew: boolean = false) => {
         setIsEngineReady(false);
+        setSummary(null);
+        setLoadError(null);
+        setAutoProgressMsg('Activating Data Engineering Runtime...');
         try {
             await pyEngine.init();
-            const dataset = await storage.getDataset(project.datasetId);
-            if (dataset) {
-                await pyEngine.loadFile(dataset.data, dataset.name);
-                for (const cell of project.cells) {
-                    if (cell.type === 'code' && cell.content.trim()) {
-                        await pyEngine.runCode(cell.content);
+            const datasetId = project.datasetId || project.id;
+            
+            // Tiered Recovery Attempt
+            const result: DatasetRecoveryResult | null = await storage.getDataset(datasetId, project.id, project.name);
+            
+            if (result) {
+                // HEALING: If recovered from a mismatching path, update metadata to prevent future errors
+                if (result.recoveredDatasetId && result.recoveredDatasetId !== project.datasetId) {
+                    setAutoProgressMsg('Self-healing project pathing...');
+                    const healedProject = { ...project, datasetId: result.recoveredDatasetId };
+                    await storage.saveProject(healedProject);
+                    setActiveProject(healedProject);
+                    await loadProjects();
+                }
+
+                setIsLocalMode(result.isLocal);
+                setAutoProgressMsg(`Mounting dataset: ${result.name}...`);
+                await pyEngine.loadFile(result.data, result.name || project.name);
+                
+                if (!isNew && project.cells) {
+                    setAutoProgressMsg('Replaying lab cells...');
+                    for (const cell of project.cells) {
+                        if (cell.type === 'code' && cell.content.trim()) await pyEngine.runCode(cell.content);
                     }
                 }
+                
                 const currentSummary = await pyEngine.getDatasetSummary();
                 setSummary(currentSummary);
+                setIsEngineReady(true);
+                
+                if (isNew) {
+                    setIsSuggesting(true);
+                    setAutoProgressMsg('AI is architecting cleaning plan...');
+                    const plan = await aiMentor.generateFullPlan(currentSummary);
+                    const newCells: NotebookCell[] = [{ id: `h_${Date.now()}`, type: 'markdown', content: `# ${plan.plan_title}\n\nAutomated Roadmap Initialized.`, metadata: { isAI: true } }];
+                    plan.steps.forEach((step, idx) => {
+                        newCells.push({ id: `m_${idx}_${Date.now()}`, type: 'markdown', content: `## ${step.step_name}\n${step.explanation}`, metadata: { isAI: true } });
+                        newCells.push({ id: `c_${idx}_${Date.now()}`, type: 'code', content: step.code, metadata: { isAI: true } });
+                    });
+                    const updated = { ...project, cells: newCells };
+                    setActiveProject(updated);
+                    await storage.saveProject(updated);
+                    setIsSuggesting(false);
+                }
+                setAutoProgressMsg('');
+            } else {
+                throw new Error(`The lab data source "${project.name}" is missing or unreachable. It may have been deleted from cloud storage.`);
             }
+        } catch (err: any) {
+            console.error("Startup Failure:", err);
+            setLoadError(err.message);
             setIsEngineReady(true);
-        } catch (err) {
-            console.error("Engine failed:", err);
+            setAutoProgressMsg('');
         }
     };
 
     const handleSelectProject = async (id: string) => {
-        const p = await storage.getProject(id);
+        const p = projects.find(proj => proj.id === id);
         if (p) {
             setActiveProject(p);
-            await startEngineForProject(p);
+            await startEngineForProject(p, !p.cells?.length);
         }
     };
 
-    const handleNewProject = (file: File) => {
-        const reader = new FileReader();
-        reader.onload = async () => {
-            const datasetId = `ds_${Date.now()}`;
-            await storage.saveDataset(datasetId, file);
-            const newProject: Project = {
-                id: `proj_${Date.now()}`,
-                name: file.name,
-                datasetId: datasetId,
-                cells: [],
-                createdAt: Date.now()
-            };
+    const handleDeleteProject = async (id: string) => {
+        const p = projects.find(proj => proj.id === id);
+        if (!p || !window.confirm(`PERMANENTLY ERASE LAB "${p.name}"? This action removes all local and cloud files associated with this project.`)) return;
+
+        if (activeProject?.id === id) { 
+            setActiveProject(null); 
+            setSummary(null); 
+            setIsEngineReady(false); 
+        }
+        setProjects(prev => prev.filter(proj => proj.id !== id));
+
+        try {
+            setAutoProgressMsg('Decommissioning data assets...');
+            await storage.deleteProject(id, p.datasetId);
+            await loadProjects();
+        } catch (err: any) { 
+            alert("Deletion Error: " + err.message); 
+            await loadProjects();
+        }
+        finally { setAutoProgressMsg(''); }
+    };
+
+    const handleNewProject = async (file: File) => {
+        if (isUploading) return;
+        setIsUploading(true);
+
+        // If fixing a project with missing data
+        if (isFixingMissingFile && activeProject) {
+            const newDatasetId = `data_${Date.now()}`;
+            setAutoProgressMsg(`Recovering project using ${file.name}...`);
+            try {
+                await storage.saveDataset(newDatasetId, file, file.name);
+                const updated = { ...activeProject, datasetId: newDatasetId, name: file.name };
+                await storage.saveProject(updated);
+                await loadProjects();
+                setActiveProject(updated);
+                setIsFixingMissingFile(false);
+                setShowUpload(false);
+                await startEngineForProject(updated, false);
+            } catch (err: any) {
+                alert("Recovery failed: " + err.message);
+            } finally {
+                setIsUploading(false);
+            }
+            return;
+        }
+
+        const projectId = `proj_${Date.now()}`;
+        const datasetId = `data_${Date.now()}`;
+        try {
+            setAutoProgressMsg('Synchronizing binary to cloud repository...');
+            await storage.saveDataset(datasetId, file, file.name);
+            const newProject: Project = { id: projectId, name: file.name, datasetId, cells: [], createdAt: Date.now() };
             await storage.saveProject(newProject);
             await loadProjects();
-            handleSelectProject(newProject.id);
             setShowUpload(false);
-        };
-        reader.readAsArrayBuffer(file);
+            setActiveProject(newProject);
+            await startEngineForProject(newProject, true);
+        } catch (err: any) { alert("Import failed: " + err.message); }
+        finally { setIsUploading(false); }
+    };
+
+    const handleSaveCleanedToCloud = async () => {
+        if (!activeProject || !summary) return;
+        if (!window.confirm("Overwrite existing cloud master with this transformed version?")) return;
+        
+        setAutoProgressMsg('Syncing cleaned master to Supabase...');
+        try {
+            const format = activeProject.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
+            const blob = await pyEngine.getDfBlob(format);
+            const fileName = `cleaned_${activeProject.name}`;
+            
+            await storage.saveDataset(activeProject.datasetId, blob, fileName);
+            const updated = { ...activeProject, name: fileName };
+            setActiveProject(updated);
+            await storage.saveProject(updated);
+            await loadProjects();
+            
+            alert("Transformed version stored in Cloud Database.");
+        } catch (err: any) {
+            alert("Cloud sync failure: " + err.message);
+        } finally {
+            setAutoProgressMsg('');
+        }
     };
 
     const handleRunCell = async (cellId: string) => {
@@ -105,188 +216,134 @@ const App: React.FC = () => {
 
         const { stdout, error } = await pyEngine.runCode(cell.content);
         let finalOutput = stdout;
-        const codeLines = cell.content.trim().split('\n');
-        const lastLine = codeLines[codeLines.length - 1];
-
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
-        let capturedChart = false;
         if (jsonMatch) {
             try {
-                const potentialJson = JSON.parse(jsonMatch[0]);
-                if (potentialJson.chart_type && potentialJson.data) {
-                    finalOutput = jsonMatch[0];
-                    capturedChart = true;
-                } else if (potentialJson.type === 'export_ready') {
-                    finalOutput = jsonMatch[0];
-                    capturedChart = true;
-                }
+                const pj = JSON.parse(jsonMatch[0]);
+                if ((pj.chart_type && pj.data) || pj.type === 'export_ready') finalOutput = jsonMatch[0];
             } catch (e) {}
         }
 
-        if (!capturedChart && lastLine && (lastLine.includes('df') || lastLine.includes('head(') || lastLine.includes('describe('))) {
-            const currentSummary = await pyEngine.getDatasetSummary();
-            finalOutput = JSON.stringify(currentSummary.sample ? JSON.parse(currentSummary.sample) : stdout);
-            setSummary(currentSummary);
-        }
-
-        cells[cellIndex] = { ...cell, isExecuting: false, output: finalOutput, error };
+        const updatedCell = { ...cell, isExecuting: false, output: finalOutput, error };
+        cells[cellIndex] = updatedCell;
         const updatedProject = { ...activeProject, cells };
         setActiveProject(updatedProject);
         await storage.saveProject(updatedProject);
-    };
-
-    const handleGeneratePlan = async () => {
-        if (!activeProject || !summary) return;
-        setIsSuggesting(true);
-        try {
-            const plan = await aiMentor.generateFullPlan(summary);
-            const newCells: NotebookCell[] = [{
-                id: `cell_header_${Date.now()}`,
-                type: 'markdown',
-                content: `# ${plan.plan_title}\n\nI have analyzed your dataset and mapped out a strict 10-row workflow to prepare it for analysis.`,
-                metadata: { isAI: true }
-            }];
-
-            plan.steps.forEach((step, idx) => {
-                newCells.push({
-                    id: `cell_md_${idx}_${Date.now()}`,
-                    type: 'markdown',
-                    content: `## ${step.step_name}\n${step.explanation}`,
-                    metadata: { isAI: true }
-                });
-                newCells.push({
-                    id: `cell_code_${idx}_${Date.now()}`,
-                    type: 'code',
-                    content: step.code,
-                    metadata: { isAI: true }
-                });
-            });
-
-            const updated = { ...activeProject, cells: [...activeProject.cells, ...newCells] };
-            setActiveProject(updated);
-            await storage.saveProject(updated);
-        } catch (err) { console.error(err); } finally { setIsSuggesting(false); }
-    };
-
-    const handleAddCell = (type: 'code' | 'markdown') => {
-        if (!activeProject) return;
-        const newCell: NotebookCell = { id: `cell_${Date.now()}`, type, content: '', isExecuting: false };
-        const updated = { ...activeProject, cells: [...activeProject.cells, newCell] };
-        setActiveProject(updated);
-    };
-
-    const handleOpenDashboard = async () => {
-        if (!activeProject) return;
-        const data = await pyEngine.getFullData();
-        setDashboardData(data);
-        setShowDashboard(true);
+        
+        const modificationRegex = /(df\s*(\[|\.|=)|drop\(|fillna\(|replace\(|apply\(|str\.|rename\(|astype\(|map\()/;
+        if (cell.content.match(modificationRegex)) {
+            const currentSummary = await pyEngine.getDatasetSummary();
+            setSummary(currentSummary);
+        }
     };
 
     return (
-        <div className="flex h-screen bg-slate-50">
-            {!user ? (
-                <Auth 
-                    onLogin={async (e, p) => {
-                        const stored = await storage.getUser(e);
-                        const hashed = await hashPassword(p);
-                        if (stored && stored.passwordHash === hashed) {
-                            setUser(stored);
-                            localStorage.setItem('dataMentor_user', JSON.stringify(stored));
-                            return true;
-                        }
-                        return false;
-                    }}
-                    onSignup={async (e, p) => {
-                        const existing = await storage.getUser(e);
-                        if (existing) return false;
-                        const hashed = await hashPassword(p);
-                        const newUser = { email: e, id: `user_${Date.now()}` };
-                        await storage.saveUser(newUser, hashed);
-                        setUser(newUser);
-                        localStorage.setItem('dataMentor_user', JSON.stringify(newUser));
-                        return true;
-                    }}
-                />
-            ) : (
+        <div className="flex h-screen bg-slate-50 overflow-hidden font-inter">
+            {!user ? ( <Auth onAuthSuccess={(u) => setUser({ email: u.email, id: u.id })} /> ) : (
                 <>
-                    <Sidebar 
-                        projects={projects}
-                        activeProjectId={activeProject?.id || null}
-                        onSelectProject={handleSelectProject}
-                        onDeleteProject={async (id) => {
-                            await storage.deleteProject(id);
-                            loadProjects();
-                            if (activeProject?.id === id) setActiveProject(null);
-                        }}
-                        onNewProject={() => setShowUpload(true)}
-                        summary={summary}
-                    />
+                    <Sidebar projects={projects} activeProjectId={activeProject?.id || null} onSelectProject={handleSelectProject} onDeleteProject={handleDeleteProject} onNewProject={() => { setShowUpload(true); setLoadError(null); setIsFixingMissingFile(false); }} summary={summary} />
                     <main className="flex-1 relative">
+                        {/* Status Badges */}
+                        <div className="absolute top-4 right-20 z-40 flex items-center gap-2">
+                            {isLocalMode ? (
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-600 rounded-full text-[10px] font-black shadow-sm">
+                                    <CloudOff className="w-3 h-3" /> LOCAL ONLY
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-600 rounded-full text-[10px] font-black shadow-sm">
+                                    <Database className="w-3 h-3" /> CLOUD ACTIVE
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Progress Overlay */}
+                        {autoProgressMsg && (
+                            <div className="absolute inset-0 z-[60] bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in duration-300">
+                                <div className="p-12 rounded-[2.5rem] bg-white shadow-2xl border border-slate-100 flex flex-col items-center gap-6 max-w-sm text-center">
+                                    <div className="relative">
+                                        <Loader2 className="w-16 h-16 text-indigo-600 animate-spin" />
+                                        <Sparkles className="absolute -top-1 -right-1 w-8 h-8 text-indigo-400 animate-bounce" />
+                                    </div>
+                                    <h3 className="text-xl font-black text-slate-800 tracking-tight italic">Engine Processing...</h3>
+                                    <p className="text-slate-500 text-sm font-medium leading-relaxed">{autoProgressMsg}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Upload Modal */}
                         {showUpload && (
                             <div className="absolute inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
-                                <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl">
-                                    <div className="flex justify-between items-center mb-6">
-                                        <h3 className="text-xl font-bold text-slate-800">New Data Project</h3>
-                                        <button onClick={() => setShowUpload(false)} className="text-slate-400 hover:text-slate-600">×</button>
+                                <div className="bg-white rounded-[2.5rem] p-10 max-w-lg w-full shadow-2xl relative">
+                                    <div className="flex justify-between items-center mb-8">
+                                        <h3 className="text-2xl font-black text-slate-800 tracking-tight">
+                                            {isFixingMissingFile ? 'Repair Missing Connection' : 'Initialize New Lab'}
+                                        </h3>
+                                        <button onClick={() => { setShowUpload(false); setIsFixingMissingFile(false); }} className="text-slate-400 hover:text-slate-900 p-2">
+                                            <X className="w-6 h-6" />
+                                        </button>
                                     </div>
-                                    <div className="border-2 border-dashed border-slate-200 rounded-2xl p-10 text-center hover:border-indigo-300 transition-colors cursor-pointer group" onClick={() => document.getElementById('fileInput')?.click()}>
+                                    <div className={`border-2 border-dashed border-slate-200 rounded-[2rem] p-12 text-center hover:border-indigo-300 transition-colors cursor-pointer group ${isUploading ? 'opacity-50 pointer-events-none' : ''}`} onClick={() => !isUploading && document.getElementById('fileInput')?.click()}>
                                         <input id="fileInput" type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={(e) => e.target.files?.[0] && handleNewProject(e.target.files[0])} />
-                                        <Upload className="w-12 h-12 text-slate-300 mx-auto mb-4 group-hover:text-indigo-400 transition-colors" />
-                                        <p className="text-sm font-medium text-slate-600">Drag and drop or click to upload</p>
+                                        {isUploading ? <Loader2 className="w-16 h-16 text-indigo-500 animate-spin mx-auto" /> : <Upload className="w-16 h-16 text-slate-300 mx-auto mb-6 group-hover:text-indigo-400" />}
+                                        <p className="text-base font-bold text-slate-700">
+                                            {isFixingMissingFile ? 'Re-upload Source Dataset' : 'Select Source Dataset'}
+                                        </p>
+                                        <p className="text-xs text-slate-400 mt-3 uppercase font-black tracking-widest">
+                                            {isFixingMissingFile ? 'Links this lab back to a physical file' : 'Syncs to Local and Supabase Cloud'}
+                                        </p>
                                     </div>
                                 </div>
                             </div>
                         )}
-                        {activeProject ? (
+
+                        {/* Error Boundary */}
+                        {loadError ? (
+                            <div className="flex-1 flex flex-col items-center justify-center h-full p-10 text-center animate-in zoom-in-95 duration-500">
+                                <div className="w-28 h-28 bg-red-50 rounded-[2.5rem] flex items-center justify-center mb-8 border border-red-100 shadow-inner">
+                                    <AlertTriangle className="w-14 h-14 text-red-500" />
+                                </div>
+                                <h2 className="text-3xl font-black text-slate-800 mb-4 tracking-tighter uppercase">Startup Blocked</h2>
+                                <p className="text-slate-500 max-w-md mb-12 leading-relaxed font-medium text-lg">{loadError}</p>
+                                <div className="flex flex-wrap justify-center gap-5">
+                                    <button onClick={() => activeProject && startEngineForProject(activeProject)} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[1.5rem] font-bold shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95"><RefreshCw className="w-6 h-6" /> AGGRESSIVE SYNC</button>
+                                    <button onClick={() => { setIsFixingMissingFile(true); setShowUpload(true); }} className="px-10 py-5 bg-white border border-slate-200 text-slate-600 rounded-[1.5rem] font-bold shadow-sm hover:bg-slate-50 transition-all">FIX BY RE-UPLOAD</button>
+                                    <button onClick={() => activeProject && handleDeleteProject(activeProject.id)} className="px-10 py-5 bg-slate-100 text-slate-400 rounded-[1.5rem] font-bold hover:bg-red-50 hover:text-red-500 transition-all">ABANDON LAB</button>
+                                </div>
+                            </div>
+                        ) : activeProject ? (
                             <Notebook 
-                                project={activeProject}
-                                isInitializing={!isEngineReady}
-                                isSuggesting={isSuggesting}
-                                summary={summary}
-                                onUpdateCell={(id, content) => {
-                                    const cells = activeProject.cells.map(c => c.id === id ? { ...c, content } : c);
-                                    setActiveProject({ ...activeProject, cells });
-                                }}
-                                onRunCell={handleRunCell}
-                                onDeleteCell={(id) => {
-                                    const cells = activeProject.cells.filter(c => c.id !== id);
-                                    setActiveProject({ ...activeProject, cells });
-                                }}
-                                onAddCell={handleAddCell}
-                                onGetSuggestion={handleGeneratePlan}
-                                onExport={async (format) => {
-                                    const bytes = await pyEngine.exportData(format);
-                                    const blob = new Blob([bytes], { type: format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-                                    const url = URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = `cleaned_${activeProject.name}.${format}`;
-                                    a.click();
-                                }}
-                                onSave={() => storage.saveProject(activeProject)}
-                                onOpenDashboard={handleOpenDashboard}
+                                project={activeProject} 
+                                isInitializing={!isEngineReady} 
+                                isSuggesting={isSuggesting} 
+                                summary={summary} 
+                                onUpdateCell={(id, content) => { const cells = activeProject.cells.map(c => c.id === id ? { ...c, content } : c); setActiveProject({ ...activeProject, cells }); }} 
+                                onRunCell={handleRunCell} 
+                                onDeleteCell={(id) => { const cells = activeProject.cells.filter(c => c.id !== id); setActiveProject({ ...activeProject, cells }); }} 
+                                onAddCell={(type) => { const newCell: NotebookCell = { id: `cell_${Date.now()}`, type, content: '', isExecuting: false }; setActiveProject({ ...activeProject, cells: [...activeProject.cells, newCell] }); }} 
+                                onGetSuggestion={() => startEngineForProject(activeProject, true)} 
+                                onExport={async (format) => { try { const bytes = await pyEngine.exportData(format); const blob = new Blob([bytes], { type: format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `cleaned_${activeProject.name.replace(/\.[^/.]+$/, "")}.${format}`; a.click(); } catch (e: any) { alert("Export failed"); } }} 
+                                onSave={() => storage.saveProject(activeProject)} 
+                                onDeleteProject={handleDeleteProject} 
+                                onSaveCleanedToCloud={handleSaveCleanedToCloud}
+                                onOpenDashboard={async () => { setDashboardData([]); setShowDashboard(true); try { const fullData = await pyEngine.getFullData(); setDashboardData(fullData); } catch (err) { console.error("Dashboard failed"); } }} 
                             />
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center h-full text-slate-400">
-                                <FileText className="w-16 h-16 mb-4 opacity-10" />
-                                <p className="text-lg font-medium">Select a project or upload a dataset to begin</p>
-                                <button onClick={() => setShowUpload(true)} className="mt-6 px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200">
-                                    UPLOAD DATASET
-                                </button>
+                                <div className="p-20 border-2 border-dashed border-slate-200 rounded-[4rem] text-center max-w-lg bg-white shadow-2xl shadow-slate-200/50">
+                                    <div className="w-32 h-32 bg-indigo-50 rounded-[3rem] flex items-center justify-center mb-10 mx-auto hover:rotate-6 transition-transform">
+                                        <Database className="w-16 h-16 text-indigo-400" />
+                                    </div>
+                                    <h3 className="text-slate-800 text-3xl font-black mb-4 tracking-tighter">Workspace Idle</h3>
+                                    <p className="text-base mb-12 text-slate-500 leading-relaxed px-10">Select an existing transformation lab or upload a raw file to initiate AI-powered Pandas engineering.</p>
+                                    <button onClick={() => setShowUpload(true)} className="w-full px-12 py-6 bg-indigo-600 text-white rounded-3xl shadow-2xl shadow-indigo-200 font-bold hover:bg-indigo-700 hover:-translate-y-1 transition-all active:translate-y-0 tracking-[0.15em] text-xs uppercase">START NEW WORKSPACE</button>
+                                </div>
                             </div>
                         )}
-                        <button onClick={() => { localStorage.removeItem('dataMentor_user'); setUser(null); }} className="absolute bottom-6 right-6 p-3 bg-white border border-slate-200 rounded-full shadow-lg text-slate-400 hover:text-red-500 hover:border-red-100 transition-all">
-                            <LogOut className="w-5 h-5" />
+                        <button onClick={() => supabase.auth.signOut()} className="absolute bottom-6 right-6 p-4 bg-white border border-slate-200 rounded-full shadow-2xl text-slate-400 hover:text-red-500 transition-all hover:scale-110" title="Exit Laboratory">
+                            <LogOut className="w-7 h-7" />
                         </button>
                     </main>
-
-                    {showDashboard && activeProject && (
-                        <Dashboard 
-                            filename={activeProject.name} 
-                            data={dashboardData} 
-                            onClose={() => setShowDashboard(false)} 
-                        />
-                    )}
+                    {showDashboard && activeProject && <Dashboard filename={activeProject.name} data={dashboardData} onClose={() => setShowDashboard(false)} />}
                 </>
             )}
         </div>

@@ -20,14 +20,11 @@ export interface ChatMessage {
 }
 
 class GeminiService {
-  private ai: GoogleGenAI | null = null;
-
-  init() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-  }
+  // Fix: Removed persistent instance and initialization logic to ensure fresh configuration per call
 
   async generateFullPlan(summary: any): Promise<CleaningPlan> {
-    if (!this.ai) this.init();
+    // Fix: Create a new GoogleGenAI instance right before making an API call
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const prompt = `
       Dataset Analysis Summary:
@@ -36,8 +33,9 @@ class GeminiService {
       Based on this data, construct a perfect 10-row cleaning plan following the strict guidelines provided.
     `;
 
-    const response = await this.ai!.models.generateContent({
-      model: 'gemini-3-flash-preview',
+    // Fix: Upgrade to 'gemini-3-pro-preview' for the complex task of generating data engineering plans
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
       contents: prompt,
       config: {
         systemInstruction: PANDAS_MENTOR_PROMPT,
@@ -72,7 +70,8 @@ class GeminiService {
   }
 
   async solveError(code: string, error: string, summary: any, chatHistory: ChatMessage[]): Promise<ChatMessage> {
-    if (!this.ai) this.init();
+    // Fix: Create a new GoogleGenAI instance right before making an API call
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const systemInstruction = `You are a world-class Python/Pandas debugging assistant (Copilot). 
     The user is encountering an error in their notebook cell.
@@ -104,8 +103,9 @@ class GeminiService {
       }
     ];
 
-    const response = await this.ai!.models.generateContent({
-      model: 'gemini-3-flash-preview',
+    // Fix: Upgrade to 'gemini-3-pro-preview' for advanced reasoning during code debugging
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
       contents,
       config: {
         systemInstruction,

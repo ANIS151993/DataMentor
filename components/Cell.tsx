@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { NotebookCell } from '../types';
-import { Play, Sparkles, Trash2, AlertCircle, Terminal, BarChart3, ChevronDown, ChevronUp, Bot, Download, FileCheck, CheckCircle2 } from 'lucide-react';
+import { Play, Sparkles, Trash2, AlertCircle, Terminal, BarChart3, ChevronDown, ChevronUp, Bot, Download, FileCheck, CheckCircle2, Loader2, Check } from 'lucide-react';
 import DataTable from './DataTable';
 import Copilot from './Copilot';
 
@@ -18,6 +18,7 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, o
     const [isEditing, setIsEditing] = useState(false);
     const [showOutput, setShowOutput] = useState(true);
     const [showCopilot, setShowCopilot] = useState(false);
+    const [hasExecuted, setHasExecuted] = useState(false);
     const chartRef = useRef<HTMLCanvasElement>(null);
     const chartInstance = useRef<any>(null);
 
@@ -27,80 +28,104 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, o
         } else {
             setShowCopilot(false);
         }
-    }, [cell.error]);
+        if (cell.output !== undefined || cell.error !== undefined) {
+            setHasExecuted(true);
+        }
+    }, [cell.error, cell.output]);
 
-    useEffect(() => {
-        if (cell.type === 'code' && cell.output && chartRef.current) {
-            try {
-                const data = JSON.parse(cell.output);
-                if (data.chart_type && data.data) {
-                    if (chartInstance.current) {
-                        chartInstance.current.destroy();
-                    }
-                    
-                    const isDoughnutOrPie = data.chart_type === 'doughnut' || data.chart_type === 'pie';
-                    const indexAxis = data.options?.indexAxis || 'x';
-                    const isStacked = !!data.options?.stacked;
+    const initChart = () => {
+        if (!cell.output || !chartRef.current) return;
+        
+        try {
+            const data = JSON.parse(cell.output);
+            if (data.chart_type && data.data) {
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+                
+                const isDoughnutOrPie = data.chart_type === 'doughnut' || data.chart_type === 'pie';
+                const indexAxis = data.options?.indexAxis || 'x';
+                const isStacked = !!data.options?.stacked;
 
-                    // @ts-ignore
-                    chartInstance.current = new Chart(chartRef.current, {
-                        type: data.chart_type,
-                        data: {
-                            labels: Object.keys(data.data),
-                            datasets: [{
-                                label: data.label || 'Data Analysis',
-                                data: Object.values(data.data),
-                                backgroundColor: [
-                                    'rgba(99, 102, 241, 0.7)',
-                                    'rgba(168, 85, 247, 0.7)',
-                                    'rgba(236, 72, 153, 0.7)',
-                                    'rgba(249, 115, 22, 0.7)',
-                                    'rgba(34, 197, 94, 0.7)',
-                                    'rgba(20, 184, 166, 0.7)',
-                                    'rgba(234, 179, 8, 0.7)',
-                                    'rgba(239, 68, 68, 0.7)'
-                                ],
-                                borderColor: 'white',
-                                borderWidth: 2,
-                                borderRadius: isDoughnutOrPie ? 0 : 6
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            indexAxis: indexAxis,
-                            plugins: {
-                                legend: { 
-                                    display: isDoughnutOrPie,
-                                    position: 'bottom',
-                                    labels: {
-                                        usePointStyle: true,
-                                        padding: 20,
-                                        font: { size: 11, weight: '600' }
-                                    }
-                                },
-                                tooltip: {
-                                    padding: 12,
-                                    backgroundColor: 'rgba(15, 23, 42, 0.9)',
-                                    titleFont: { size: 13, weight: 'bold' },
-                                    bodyFont: { size: 12 }
+                // @ts-ignore
+                chartInstance.current = new Chart(chartRef.current, {
+                    type: data.chart_type,
+                    data: {
+                        labels: Object.keys(data.data),
+                        datasets: [{
+                            label: data.label || 'Data Analysis',
+                            data: Object.values(data.data),
+                            backgroundColor: [
+                                'rgba(99, 102, 241, 0.7)',
+                                'rgba(168, 85, 247, 0.7)',
+                                'rgba(236, 72, 153, 0.7)',
+                                'rgba(249, 115, 22, 0.7)',
+                                'rgba(34, 197, 94, 0.7)',
+                                'rgba(20, 184, 166, 0.7)',
+                                'rgba(234, 179, 8, 0.7)',
+                                'rgba(239, 68, 68, 0.7)'
+                            ],
+                            borderColor: 'white',
+                            borderWidth: 2,
+                            borderRadius: isDoughnutOrPie ? 0 : 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: indexAxis,
+                        plugins: {
+                            legend: { 
+                                display: isDoughnutOrPie,
+                                position: 'bottom',
+                                labels: {
+                                    usePointStyle: true,
+                                    padding: 20,
+                                    font: { size: 11, weight: '600' }
                                 }
                             },
-                            scales: isDoughnutOrPie ? {} : {
-                                x: { stacked: isStacked, grid: { display: false } },
-                                y: { stacked: isStacked, grid: { color: 'rgba(0,0,0,0.05)' } }
+                            tooltip: {
+                                padding: 12,
+                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                titleFont: { size: 13, weight: 'bold' },
+                                bodyFont: { size: 12 }
                             }
+                        },
+                        scales: isDoughnutOrPie ? {} : {
+                            x: { stacked: isStacked, grid: { display: false } },
+                            y: { stacked: isStacked, grid: { color: 'rgba(0,0,0,0.05)' } }
                         }
-                    });
-                }
-            } catch (e) {
-                console.error("Chart build error:", e);
+                    }
+                });
             }
+        } catch (e) {
+            console.error("Chart build error:", e);
         }
-    }, [cell.output]);
+    };
+
+    useEffect(() => {
+        const observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting) {
+                initChart();
+            }
+        }, { threshold: 0.1 });
+
+        if (chartRef.current) {
+            observer.observe(chartRef.current);
+        }
+        initChart();
+        return () => observer.disconnect();
+    }, [cell.output, showOutput]);
 
     const renderOutput = () => {
-        if (!cell.output && !cell.error) return null;
+        if (cell.isExecuting) {
+            return (
+                <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-center gap-3 animate-pulse">
+                    <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Engine Processing...</span>
+                </div>
+            );
+        }
 
         if (cell.error) {
             return (
@@ -140,6 +165,17 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, o
             );
         }
 
+        if (cell.output === undefined && !hasExecuted) return null;
+
+        // Success indicator for empty outputs
+        if (!cell.output && !cell.error && hasExecuted) {
+            return (
+                <div className="mt-4 p-3 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center gap-2 text-emerald-600 text-[10px] font-black uppercase tracking-[0.2em]">
+                    <Check className="w-3 h-3" /> Execution Complete (No Output)
+                </div>
+            );
+        }
+
         try {
             const data = JSON.parse(cell.output!);
             
@@ -151,7 +187,7 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, o
                         </div>
                         <h3 className="text-2xl font-bold mb-3 tracking-tight">Cleaning Lab Success!</h3>
                         <p className="text-indigo-100 text-sm mb-8 max-w-sm leading-relaxed">
-                            {data.message || "Your transformation workflow is complete. The dataset is polished and ready for download."}
+                            {data.message || "Your transformation workflow is complete."}
                         </p>
                         
                         <div className="flex items-center gap-8 mb-10 text-xs font-bold uppercase tracking-[0.2em] opacity-90">
@@ -172,12 +208,6 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, o
                                 className="flex-1 flex items-center justify-center gap-3 px-8 py-4 bg-white text-indigo-700 rounded-2xl font-bold hover:bg-indigo-50 transition-all shadow-xl hover:-translate-y-1 active:translate-y-0"
                             >
                                 <Download className="w-5 h-5" /> DOWNLOAD CSV
-                            </button>
-                            <button 
-                                onClick={() => onExport?.('xlsx')}
-                                className="flex-1 flex items-center justify-center gap-3 px-8 py-4 bg-indigo-500/50 text-white border border-indigo-400/50 backdrop-blur-sm rounded-2xl font-bold hover:bg-indigo-400/60 transition-all shadow-xl hover:-translate-y-1 active:translate-y-0"
-                            >
-                                <Download className="w-5 h-5" /> DOWNLOAD EXCEL
                             </button>
                         </div>
                     </div>
@@ -216,7 +246,7 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, o
             <div className="absolute right-4 top-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                 {cell.type === 'code' && (
                     <button 
-                        onClick={() => onRun(cell.id)}
+                        onClick={() => { onRun(cell.id); setHasExecuted(true); }}
                         disabled={cell.isExecuting}
                         className="p-1.5 bg-indigo-600 text-white rounded-lg shadow-lg shadow-indigo-200 hover:scale-110 transition-transform disabled:bg-slate-300"
                     >
@@ -249,7 +279,7 @@ const Cell: React.FC<CellProps> = ({ cell, summary, onRun, onDelete, onUpdate, o
                             {cell.metadata?.isAI ? <Sparkles className="w-3 h-3 text-indigo-500" /> : <Terminal className="w-3 h-3" />}
                             <span>{cell.metadata?.isAI ? 'AI Suggested Transformation' : 'Python Workspace'}</span>
                         </div>
-                        {cell.output && (
+                        {(cell.output || hasExecuted) && (
                              <button onClick={() => setShowOutput(!showOutput)} className="hover:text-indigo-500 flex items-center gap-1">
                                 {showOutput ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                                 {showOutput ? 'Hide Results' : 'Show Results'}

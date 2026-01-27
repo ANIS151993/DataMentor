@@ -1,13 +1,13 @@
 
 import React, { useState } from 'react';
 import { Database, ShieldCheck, Mail, Lock, Loader2 } from 'lucide-react';
+import { supabase } from '../services/supabaseClient';
 
 interface AuthProps {
-    onLogin: (email: string, pass: string) => Promise<boolean>;
-    onSignup: (email: string, pass: string) => Promise<boolean>;
+    onAuthSuccess: (user: any) => void;
 }
 
-const Auth: React.FC<AuthProps> = ({ onLogin, onSignup }) => {
+const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -19,10 +19,23 @@ const Auth: React.FC<AuthProps> = ({ onLogin, onSignup }) => {
         setError('');
         setIsLoading(true);
         try {
-            const success = isLogin ? await onLogin(email, password) : await onSignup(email, password);
-            if (!success) setError(isLogin ? 'Invalid credentials' : 'User already exists');
-        } catch (err) {
-            setError('An error occurred');
+            if (isLogin) {
+                const { data, error: authError } = await supabase.auth.signInWithPassword({
+                    email,
+                    password,
+                });
+                if (authError) throw authError;
+                if (data.user) onAuthSuccess(data.user);
+            } else {
+                const { data, error: authError } = await supabase.auth.signUp({
+                    email,
+                    password,
+                });
+                if (authError) throw authError;
+                if (data.user) onAuthSuccess(data.user);
+            }
+        } catch (err: any) {
+            setError(err.message || 'An error occurred during authentication');
         } finally {
             setIsLoading(false);
         }
@@ -41,7 +54,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, onSignup }) => {
                         <Database className="w-8 h-8 text-white" />
                     </div>
                     <h1 className="text-2xl font-bold">DataMentor AI</h1>
-                    <p className="text-indigo-100 text-sm mt-1">Smart Pandas Cleaning Lab</p>
+                    <p className="text-indigo-100 text-sm mt-1">Cloud-Powered Pandas Lab</p>
                 </div>
 
                 <div className="p-8">
@@ -108,7 +121,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, onSignup }) => {
 
                     <div className="mt-8 pt-6 border-t border-slate-100 text-center">
                         <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold flex items-center justify-center gap-2">
-                            <ShieldCheck className="w-3 h-3" /> Secure Local Execution
+                            <ShieldCheck className="w-3 h-3" /> Supabase Managed Auth
                         </p>
                     </div>
                 </div>
