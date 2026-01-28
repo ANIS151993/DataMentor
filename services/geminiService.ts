@@ -22,9 +22,12 @@ export interface ChatMessage {
 class GeminiService {
   private getAI() {
     const key = process.env.API_KEY;
-    if (!key) {
-        throw new Error("API Key is missing. Please click 'Connect Gemini API' to continue.");
+    
+    // Check if key is actually a valid string and not a literal 'undefined' from build tools
+    if (!key || key === 'undefined' || key === 'null' || key.length < 5) {
+        throw new Error("API Key Missing: Please configure your Gemini API Key.");
     }
+    
     return new GoogleGenAI({ apiKey: key });
   }
 

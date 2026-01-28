@@ -9,7 +9,7 @@ import { storage, DatasetRecoveryResult } from './services/storageService';
 import { pyEngine } from './services/pyodideService';
 import { aiMentor } from './services/geminiService';
 import { supabase } from './services/supabaseClient';
-import { LogOut, Upload, FileText, Loader2, Sparkles, Database, CloudOff, AlertTriangle, RefreshCw, X, Key } from 'lucide-react';
+import { LogOut, Upload, FileText, Loader2, Sparkles, Database, CloudOff, AlertTriangle, RefreshCw, X, Key, Info, ExternalLink } from 'lucide-react';
 
 const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
@@ -25,22 +25,30 @@ const App: React.FC = () => {
     const [autoProgressMsg, setAutoProgressMsg] = useState('');
     const [isLocalMode, setIsLocalMode] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [isFixingMissingFile, setIsFixingMissingFile] = useState(false);
     const [isKeyChecking, setIsKeyChecking] = useState(true);
     const [needsKey, setNeedsKey] = useState(false);
 
+    // Robust check for API Key presence
     const checkApiKeyStatus = useCallback(async () => {
-        if (process.env.API_KEY) {
+        const envKey = process.env.API_KEY;
+        if (envKey && envKey !== 'undefined' && envKey !== 'null' && envKey.length > 5) {
             setNeedsKey(false);
             return true;
         }
+
         // @ts-ignore
         if (window.aistudio) {
-            // @ts-ignore
-            const hasKey = await window.aistudio.hasSelectedApiKey();
-            setNeedsKey(!hasKey);
-            return hasKey;
+            try {
+                // @ts-ignore
+                const hasKey = await window.aistudio.hasSelectedApiKey();
+                setNeedsKey(!hasKey);
+                return hasKey;
+            } catch (e) {
+                setNeedsKey(true);
+                return false;
+            }
         }
+
         setNeedsKey(true);
         return false;
     }, []);
@@ -52,16 +60,16 @@ const App: React.FC = () => {
     const handleOpenKeyDialog = async () => {
         // @ts-ignore
         if (window.aistudio) {
-            // @ts-ignore
-            await window.aistudio.openSelectKey();
-            // Assume success per instructions to avoid race conditions
-            setNeedsKey(false);
-            setLoadError(null);
-            if (activeProject) {
-                startEngineForProject(activeProject);
+            try {
+                // @ts-ignore
+                await window.aistudio.openSelectKey();
+                // Instructions dictate we assume success to avoid race conditions
+                setNeedsKey(false);
+                setLoadError(null);
+                if (activeProject) startEngineForProject(activeProject);
+            } catch (e) {
+                console.error("Key selection failed", e);
             }
-        } else {
-            alert("To connect Gemini AI, please ensure you are in a supported environment or have set the API_KEY environment variable.");
         }
     };
 
@@ -134,9 +142,9 @@ const App: React.FC = () => {
             }
         } catch (err: any) {
             const msg = err.message || '';
-            if (msg.includes("API Key") || msg.includes("key") || msg.includes("entity was not found")) {
+            if (msg.toLowerCase().includes("key") || msg.toLowerCase().includes("api")) {
                 setNeedsKey(true);
-                setLoadError("AI Disconnected: A Gemini API Key is required.");
+                setLoadError("AI Authentication Failed");
             } else {
                 setLoadError(err.message);
             }
@@ -161,24 +169,19 @@ const App: React.FC = () => {
         await loadProjects();
     };
 
-    // Fix for line 255: Added handleRunCell to manage notebook cell execution
     const handleRunCell = async (cellId: string) => {
         if (!activeProject || !isEngineReady) return;
-
         const cellIndex = activeProject.cells.findIndex(c => c.id === cellId);
         if (cellIndex === -1) return;
-
         const cell = activeProject.cells[cellIndex];
         if (cell.type !== 'code') return;
 
-        // Set executing state to trigger UI updates
         const updatedCells = [...activeProject.cells];
         updatedCells[cellIndex] = { ...cell, isExecuting: true, output: undefined, error: undefined };
         setActiveProject({ ...activeProject, cells: updatedCells });
 
         try {
             const { result, stdout, error } = await pyEngine.runCode(cell.content);
-            
             const finalCells = [...activeProject.cells];
             const finalIdx = finalCells.findIndex(c => c.id === cellId);
             if (finalIdx !== -1) {
@@ -188,14 +191,10 @@ const App: React.FC = () => {
                     output: stdout || (result !== undefined ? String(result) : undefined), 
                     error 
                 };
-                
                 const updatedProject = { ...activeProject, cells: finalCells };
                 setActiveProject(updatedProject);
-                
-                // Refresh dataset summary after potential data transformations
                 const currentSummary = await pyEngine.getDatasetSummary();
                 setSummary(currentSummary);
-                
                 await storage.saveProject(updatedProject);
             }
         } catch (err: any) {
@@ -230,7 +229,10 @@ const App: React.FC = () => {
     if (isKeyChecking) {
         return (
             <div className="flex h-screen bg-slate-900 items-center justify-center">
-                <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+                <div className="text-center">
+                    <Loader2 className="w-12 h-12 text-indigo-500 animate-spin mx-auto mb-4" />
+                    <p className="text-indigo-200 text-xs font-bold uppercase tracking-widest">Handshaking with Gemini...</p>
+                </div>
             </div>
         );
     }
@@ -241,18 +243,77 @@ const App: React.FC = () => {
                 <>
                     <Sidebar projects={projects} activeProjectId={activeProject?.id || null} onSelectProject={handleSelectProject} onDeleteProject={handleDeleteProject} onNewProject={() => { setShowUpload(true); setLoadError(null); }} summary={summary} />
                     <main className="flex-1 relative">
-                        {/* Connection Badge */}
-                        <div className="absolute top-4 right-20 z-40">
+                        {/* Connection Status Bar */}
+                        <div className="absolute top-4 right-8 z-40 flex items-center gap-2">
                             {needsKey ? (
-                                <button onClick={handleOpenKeyDialog} className="flex items-center gap-2 px-4 py-2 bg-red-50 border border-red-200 text-red-600 rounded-full text-[10px] font-black shadow-lg hover:bg-red-100 transition-all">
-                                    <Key className="w-3 h-3" /> CONNECT GEMINI API
-                                </button>
+                                <div className="flex items-center gap-2 px-4 py-2 bg-red-50 border border-red-200 text-red-600 rounded-full text-[10px] font-black shadow-lg">
+                                    <CloudOff className="w-3 h-3" /> AI DISCONNECTED
+                                </div>
                             ) : (
                                 <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-200 text-emerald-600 rounded-full text-[10px] font-black shadow-sm">
-                                    <Sparkles className="w-3 h-3" /> AI ACTIVE
+                                    <Sparkles className="w-3 h-3" /> AI ENGINE READY
                                 </div>
                             )}
                         </div>
+
+                        {/* Setup Assistant for Disconnected state */}
+                        {needsKey && (
+                            <div className="absolute inset-0 z-50 bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-6">
+                                <div className="max-w-2xl w-full bg-white rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-500">
+                                    <div className="bg-indigo-600 p-10 text-white relative">
+                                        <div className="absolute top-0 right-0 p-12 opacity-10">
+                                            <Key className="w-48 h-48 rotate-12" />
+                                        </div>
+                                        <h2 className="text-4xl font-black mb-2 italic">Connection Required</h2>
+                                        <p className="text-indigo-100 font-medium">To enable automated data engineering, we need a Gemini API Key.</p>
+                                    </div>
+                                    <div className="p-10 space-y-8">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            {/* Option 1: AI Studio */}
+                                            {/* @ts-ignore */}
+                                            {window.aistudio ? (
+                                                <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 flex flex-col items-start">
+                                                    <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
+                                                        <Sparkles className="w-5 h-5" />
+                                                    </div>
+                                                    <h3 className="font-bold text-slate-800 mb-2">Native Connector</h3>
+                                                    <p className="text-xs text-slate-500 mb-6 leading-relaxed">You are in a supported AI Studio environment. Connect your paid API key directly.</p>
+                                                    <button onClick={handleOpenKeyDialog} className="mt-auto w-full py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-100">
+                                                        <Key className="w-3 h-3" /> CONNECT NOW
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 flex flex-col items-start opacity-50">
+                                                    <div className="w-10 h-10 bg-slate-200 text-slate-400 rounded-xl flex items-center justify-center mb-4">
+                                                        <Sparkles className="w-5 h-5" />
+                                                    </div>
+                                                    <h3 className="font-bold text-slate-400 mb-2">Native Connector</h3>
+                                                    <p className="text-xs text-slate-400 mb-2">Not available in this environment.</p>
+                                                </div>
+                                            )}
+
+                                            {/* Option 2: Environment Variables */}
+                                            <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 flex flex-col items-start">
+                                                <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center mb-4">
+                                                    <Database className="w-5 h-5" />
+                                                </div>
+                                                <h3 className="font-bold text-slate-800 mb-2">Cloud Environment</h3>
+                                                <p className="text-xs text-slate-500 mb-6 leading-relaxed">Using Vercel or Netlify? Set your <code className="bg-slate-200 px-1 rounded">API_KEY</code> variable in the dashboard.</p>
+                                                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="mt-auto w-full py-3 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100 transition-all flex items-center justify-center gap-2">
+                                                    <ExternalLink className="w-3 h-3" /> GET API KEY
+                                                </a>
+                                            </div>
+                                        </div>
+                                        <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex items-start gap-3">
+                                            <Info className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                                            <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                                                Note: To use Gemini 3.0 Pro, Google requires a **Paid API Key** from a billing-enabled GCP project. Free-tier keys may cause connection errors in production environments.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {autoProgressMsg && (
                             <div className="absolute inset-0 z-[60] bg-white/80 backdrop-blur-sm flex items-center justify-center">
@@ -265,7 +326,7 @@ const App: React.FC = () => {
 
                         {showUpload && (
                             <div className="absolute inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
-                                <div className="bg-white rounded-[2rem] p-10 max-lg w-full shadow-2xl relative">
+                                <div className="bg-white rounded-[2rem] p-10 max-w-lg w-full shadow-2xl relative">
                                     <button onClick={() => setShowUpload(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-900"><X /></button>
                                     <h3 className="text-2xl font-black mb-6">Initialize New Lab</h3>
                                     <div className="border-4 border-dashed border-slate-100 rounded-[1.5rem] p-12 text-center hover:border-indigo-200 cursor-pointer" onClick={() => document.getElementById('fileInput')?.click()}>
@@ -277,22 +338,14 @@ const App: React.FC = () => {
                             </div>
                         )}
 
-                        {loadError ? (
+                        {loadError && !needsKey ? (
                             <div className="h-full flex flex-col items-center justify-center text-center p-10">
                                 <AlertTriangle className="w-20 h-20 text-red-500 mb-6" />
-                                <h2 className="text-3xl font-black text-slate-800 mb-4 uppercase">Startup Blocked</h2>
+                                <h2 className="text-3xl font-black text-slate-800 mb-4 uppercase">System Error</h2>
                                 <p className="text-slate-500 max-w-md mb-8">{loadError}</p>
-                                <div className="flex gap-4">
-                                    {needsKey ? (
-                                        <button onClick={handleOpenKeyDialog} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 flex items-center gap-2">
-                                            <Key className="w-5 h-5" /> CONNECT GEMINI API
-                                        </button>
-                                    ) : (
-                                        <button onClick={() => activeProject && startEngineForProject(activeProject)} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 flex items-center gap-2">
-                                            <RefreshCw className="w-5 h-5" /> RETRY SYNC
-                                        </button>
-                                    )}
-                                </div>
+                                <button onClick={() => activeProject && startEngineForProject(activeProject)} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 flex items-center gap-2">
+                                    <RefreshCw className="w-5 h-5" /> RESTART ENGINE
+                                </button>
                             </div>
                         ) : activeProject ? (
                             <Notebook 
