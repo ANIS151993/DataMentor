@@ -29,38 +29,39 @@ const App: React.FC = () => {
     const [isKeyChecking, setIsKeyChecking] = useState(true);
     const [needsKey, setNeedsKey] = useState(false);
 
-    // AI Key Check logic to handle missing process.env.API_KEY in browser
-    useEffect(() => {
-        const checkApiKey = async () => {
-            if (process.env.API_KEY) {
-                setNeedsKey(false);
-                setIsKeyChecking(false);
-                return;
-            }
-
+    const checkApiKeyStatus = useCallback(async () => {
+        if (process.env.API_KEY) {
+            setNeedsKey(false);
+            return true;
+        }
+        // @ts-ignore
+        if (window.aistudio) {
             // @ts-ignore
-            if (window.aistudio) {
-                // @ts-ignore
-                const hasKey = await window.aistudio.hasSelectedApiKey();
-                setNeedsKey(!hasKey);
-            } else {
-                setNeedsKey(!process.env.API_KEY);
-            }
-            setIsKeyChecking(false);
-        };
-        checkApiKey();
+            const hasKey = await window.aistudio.hasSelectedApiKey();
+            setNeedsKey(!hasKey);
+            return hasKey;
+        }
+        setNeedsKey(true);
+        return false;
     }, []);
+
+    useEffect(() => {
+        checkApiKeyStatus().then(() => setIsKeyChecking(false));
+    }, [checkApiKeyStatus]);
 
     const handleOpenKeyDialog = async () => {
         // @ts-ignore
         if (window.aistudio) {
             // @ts-ignore
             await window.aistudio.openSelectKey();
+            // Assume success per instructions to avoid race conditions
             setNeedsKey(false);
-            setLoadError(null); // Clear errors after potentially fixing the key
-            if (activeProject) startEngineForProject(activeProject);
+            setLoadError(null);
+            if (activeProject) {
+                startEngineForProject(activeProject);
+            }
         } else {
-            alert("This environment requires an API_KEY environment variable or the AI Studio key selector.");
+            alert("To connect Gemini AI, please ensure you are in a supported environment or have set the API_KEY environment variable.");
         }
     };
 
@@ -91,21 +92,13 @@ const App: React.FC = () => {
         setSummary(null);
         setLoadError(null);
         setAutoProgressMsg('Activating Data Engineering Runtime...');
+        
         try {
             await pyEngine.init();
             const datasetId = project.datasetId || project.id;
-            
             const result: DatasetRecoveryResult | null = await storage.getDataset(datasetId, project.id, project.name);
             
             if (result) {
-                if (result.recoveredDatasetId && result.recoveredDatasetId !== project.datasetId) {
-                    setAutoProgressMsg('Self-healing project pathing...');
-                    const healedProject = { ...project, datasetId: result.recoveredDatasetId };
-                    await storage.saveProject(healedProject);
-                    setActiveProject(healedProject);
-                    await loadProjects();
-                }
-
                 setIsLocalMode(result.isLocal);
                 setAutoProgressMsg(`Mounting dataset: ${result.name}...`);
                 await pyEngine.loadFile(result.data, result.name || project.name);
@@ -137,15 +130,16 @@ const App: React.FC = () => {
                 }
                 setAutoProgressMsg('');
             } else {
-                throw new Error(`The lab data source "${project.name}" is missing or unreachable.`);
+                throw new Error(`Data source "${project.name}" not found.`);
             }
         } catch (err: any) {
-            console.error("Startup Failure:", err);
-            // Detect if the error is due to missing API Key
-            if (err.message.includes("API Key") || err.message.includes("key") || err.message.includes("found")) {
+            const msg = err.message || '';
+            if (msg.includes("API Key") || msg.includes("key") || msg.includes("entity was not found")) {
                 setNeedsKey(true);
+                setLoadError("AI Disconnected: A Gemini API Key is required.");
+            } else {
+                setLoadError(err.message);
             }
-            setLoadError(err.message);
             setIsEngineReady(true);
             setAutoProgressMsg('');
         }
@@ -161,118 +155,76 @@ const App: React.FC = () => {
 
     const handleDeleteProject = async (id: string) => {
         const p = projects.find(proj => proj.id === id);
-        if (!p || !window.confirm(`PERMANENTLY ERASE LAB "${p.name}"?`)) return;
+        if (!p || !window.confirm(`Delete Lab "${p.name}"?`)) return;
+        if (activeProject?.id === id) { setActiveProject(null); setSummary(null); }
+        await storage.deleteProject(id, p.datasetId);
+        await loadProjects();
+    };
 
-        if (activeProject?.id === id) { 
-            setActiveProject(null); 
-            setSummary(null); 
-            setIsEngineReady(false); 
-        }
-        setProjects(prev => prev.filter(proj => proj.id !== id));
+    // Fix for line 255: Added handleRunCell to manage notebook cell execution
+    const handleRunCell = async (cellId: string) => {
+        if (!activeProject || !isEngineReady) return;
+
+        const cellIndex = activeProject.cells.findIndex(c => c.id === cellId);
+        if (cellIndex === -1) return;
+
+        const cell = activeProject.cells[cellIndex];
+        if (cell.type !== 'code') return;
+
+        // Set executing state to trigger UI updates
+        const updatedCells = [...activeProject.cells];
+        updatedCells[cellIndex] = { ...cell, isExecuting: true, output: undefined, error: undefined };
+        setActiveProject({ ...activeProject, cells: updatedCells });
 
         try {
-            setAutoProgressMsg('Decommissioning data assets...');
-            await storage.deleteProject(id, p.datasetId);
-            await loadProjects();
-        } catch (err: any) { 
-            alert("Deletion Error: " + err.message); 
-            await loadProjects();
+            const { result, stdout, error } = await pyEngine.runCode(cell.content);
+            
+            const finalCells = [...activeProject.cells];
+            const finalIdx = finalCells.findIndex(c => c.id === cellId);
+            if (finalIdx !== -1) {
+                finalCells[finalIdx] = { 
+                    ...finalCells[finalIdx], 
+                    isExecuting: false, 
+                    output: stdout || (result !== undefined ? String(result) : undefined), 
+                    error 
+                };
+                
+                const updatedProject = { ...activeProject, cells: finalCells };
+                setActiveProject(updatedProject);
+                
+                // Refresh dataset summary after potential data transformations
+                const currentSummary = await pyEngine.getDatasetSummary();
+                setSummary(currentSummary);
+                
+                await storage.saveProject(updatedProject);
+            }
+        } catch (err: any) {
+            const finalCells = [...activeProject.cells];
+            const finalIdx = finalCells.findIndex(c => c.id === cellId);
+            if (finalIdx !== -1) {
+                finalCells[finalIdx] = { ...finalCells[finalIdx], isExecuting: false, error: err.message };
+                const updatedProject = { ...activeProject, cells: finalCells };
+                setActiveProject(updatedProject);
+                await storage.saveProject(updatedProject);
+            }
         }
-        finally { setAutoProgressMsg(''); }
     };
 
     const handleNewProject = async (file: File) => {
         if (isUploading) return;
         setIsUploading(true);
-
-        if (isFixingMissingFile && activeProject) {
-            const newDatasetId = `data_${Date.now()}`;
-            setAutoProgressMsg(`Recovering project using ${file.name}...`);
-            try {
-                await storage.saveDataset(newDatasetId, file, file.name);
-                const updated = { ...activeProject, datasetId: newDatasetId, name: file.name };
-                await storage.saveProject(updated);
-                await loadProjects();
-                setActiveProject(updated);
-                setIsFixingMissingFile(false);
-                setShowUpload(false);
-                await startEngineForProject(updated, false);
-            } catch (err: any) {
-                alert("Recovery failed: " + err.message);
-            } finally {
-                setIsUploading(false);
-            }
-            return;
-        }
-
-        const projectId = `proj_${Date.now()}`;
-        const datasetId = `data_${Date.now()}`;
+        setAutoProgressMsg('Importing dataset...');
         try {
-            setAutoProgressMsg('Synchronizing binary to cloud repository...');
+            const datasetId = `data_${Date.now()}`;
             await storage.saveDataset(datasetId, file, file.name);
-            const newProject: Project = { id: projectId, name: file.name, datasetId, cells: [], createdAt: Date.now() };
+            const newProject: Project = { id: `proj_${Date.now()}`, name: file.name, datasetId, cells: [], createdAt: Date.now() };
             await storage.saveProject(newProject);
             await loadProjects();
             setShowUpload(false);
             setActiveProject(newProject);
             await startEngineForProject(newProject, true);
         } catch (err: any) { alert("Import failed: " + err.message); }
-        finally { setIsUploading(false); }
-    };
-
-    const handleSaveCleanedToCloud = async () => {
-        if (!activeProject || !summary) return;
-        if (!window.confirm("Overwrite existing cloud master?")) return;
-        
-        setAutoProgressMsg('Syncing cleaned master...');
-        try {
-            const format = activeProject.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
-            const blob = await pyEngine.getDfBlob(format);
-            const fileName = `cleaned_${activeProject.name}`;
-            
-            await storage.saveDataset(activeProject.datasetId, blob, fileName);
-            const updated = { ...activeProject, name: fileName };
-            setActiveProject(updated);
-            await storage.saveProject(updated);
-            await loadProjects();
-            
-            alert("Transformed version stored in Cloud.");
-        } catch (err: any) {
-            alert("Cloud sync failure: " + err.message);
-        } finally {
-            setAutoProgressMsg('');
-        }
-    };
-
-    const handleRunCell = async (cellId: string) => {
-        if (!activeProject) return;
-        const cellIndex = activeProject.cells.findIndex(c => c.id === cellId);
-        const cells = [...activeProject.cells];
-        const cell = { ...cells[cellIndex], isExecuting: true, error: undefined, output: undefined };
-        cells[cellIndex] = cell;
-        setActiveProject({ ...activeProject, cells });
-
-        const { stdout, error } = await pyEngine.runCode(cell.content);
-        let finalOutput = stdout;
-        const jsonMatch = stdout.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            try {
-                const pj = JSON.parse(jsonMatch[0]);
-                if ((pj.chart_type && pj.data) || pj.type === 'export_ready') finalOutput = jsonMatch[0];
-            } catch (e) {}
-        }
-
-        const updatedCell = { ...cell, isExecuting: false, output: finalOutput, error };
-        cells[cellIndex] = updatedCell;
-        const updatedProject = { ...activeProject, cells };
-        setActiveProject(updatedProject);
-        await storage.saveProject(updatedProject);
-        
-        const modificationRegex = /(df\s*(\[|\.|=)|drop\(|fillna\(|replace\(|apply\(|str\.|rename\(|astype\(|map\()/;
-        if (cell.content.match(modificationRegex)) {
-            const currentSummary = await pyEngine.getDatasetSummary();
-            setSummary(currentSummary);
-        }
+        finally { setIsUploading(false); setAutoProgressMsg(''); }
     };
 
     if (isKeyChecking) {
@@ -287,89 +239,60 @@ const App: React.FC = () => {
         <div className="flex h-screen bg-slate-50 overflow-hidden font-inter">
             {!user ? ( <Auth onAuthSuccess={(u) => setUser({ email: u.email, id: u.id })} /> ) : (
                 <>
-                    <Sidebar projects={projects} activeProjectId={activeProject?.id || null} onSelectProject={handleSelectProject} onDeleteProject={handleDeleteProject} onNewProject={() => { setShowUpload(true); setLoadError(null); setIsFixingMissingFile(false); }} summary={summary} />
+                    <Sidebar projects={projects} activeProjectId={activeProject?.id || null} onSelectProject={handleSelectProject} onDeleteProject={handleDeleteProject} onNewProject={() => { setShowUpload(true); setLoadError(null); }} summary={summary} />
                     <main className="flex-1 relative">
-                        {/* Status Badges */}
-                        <div className="absolute top-4 right-20 z-40 flex items-center gap-2">
+                        {/* Connection Badge */}
+                        <div className="absolute top-4 right-20 z-40">
                             {needsKey ? (
-                                <button onClick={handleOpenKeyDialog} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 border border-red-200 text-red-600 rounded-full text-[10px] font-black shadow-sm hover:bg-red-100 transition-colors">
-                                    <Key className="w-3 h-3" /> AI DISCONNECTED
+                                <button onClick={handleOpenKeyDialog} className="flex items-center gap-2 px-4 py-2 bg-red-50 border border-red-200 text-red-600 rounded-full text-[10px] font-black shadow-lg hover:bg-red-100 transition-all">
+                                    <Key className="w-3 h-3" /> CONNECT GEMINI API
                                 </button>
-                            ) : isLocalMode ? (
-                                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-600 rounded-full text-[10px] font-black shadow-sm">
-                                    <CloudOff className="w-3 h-3" /> LOCAL ONLY
-                                </div>
                             ) : (
-                                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-600 rounded-full text-[10px] font-black shadow-sm">
-                                    <Database className="w-3 h-3" /> CLOUD ACTIVE
+                                <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-200 text-emerald-600 rounded-full text-[10px] font-black shadow-sm">
+                                    <Sparkles className="w-3 h-3" /> AI ACTIVE
                                 </div>
                             )}
                         </div>
 
-                        {/* Progress Overlay */}
                         {autoProgressMsg && (
-                            <div className="absolute inset-0 z-[60] bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in duration-300">
-                                <div className="p-12 rounded-[2.5rem] bg-white shadow-2xl border border-slate-100 flex flex-col items-center gap-6 max-w-sm text-center">
-                                    <div className="relative">
-                                        <Loader2 className="w-16 h-16 text-indigo-600 animate-spin" />
-                                        <Sparkles className="absolute -top-1 -right-1 w-8 h-8 text-indigo-400 animate-bounce" />
-                                    </div>
-                                    <h3 className="text-xl font-black text-slate-800 tracking-tight italic">Engine Processing...</h3>
-                                    <p className="text-slate-500 text-sm font-medium leading-relaxed">{autoProgressMsg}</p>
+                            <div className="absolute inset-0 z-[60] bg-white/80 backdrop-blur-sm flex items-center justify-center">
+                                <div className="text-center p-12 bg-white rounded-[2.5rem] shadow-2xl border border-slate-100">
+                                    <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mx-auto mb-4" />
+                                    <p className="text-slate-700 font-bold">{autoProgressMsg}</p>
                                 </div>
                             </div>
                         )}
 
-                        {/* Upload Modal */}
                         {showUpload && (
                             <div className="absolute inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
-                                <div className="bg-white rounded-[2.5rem] p-10 max-w-lg w-full shadow-2xl relative">
-                                    <div className="flex justify-between items-center mb-8">
-                                        <h3 className="text-2xl font-black text-slate-800 tracking-tight">
-                                            {isFixingMissingFile ? 'Repair Missing Connection' : 'Initialize New Lab'}
-                                        </h3>
-                                        <button onClick={() => { setShowUpload(false); setIsFixingMissingFile(false); }} className="text-slate-400 hover:text-slate-900 p-2">
-                                            <X className="w-6 h-6" />
-                                        </button>
-                                    </div>
-                                    <div className={`border-2 border-dashed border-slate-200 rounded-[2rem] p-12 text-center hover:border-indigo-300 transition-colors cursor-pointer group ${isUploading ? 'opacity-50 pointer-events-none' : ''}`} onClick={() => !isUploading && document.getElementById('fileInput')?.click()}>
+                                <div className="bg-white rounded-[2rem] p-10 max-lg w-full shadow-2xl relative">
+                                    <button onClick={() => setShowUpload(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-900"><X /></button>
+                                    <h3 className="text-2xl font-black mb-6">Initialize New Lab</h3>
+                                    <div className="border-4 border-dashed border-slate-100 rounded-[1.5rem] p-12 text-center hover:border-indigo-200 cursor-pointer" onClick={() => document.getElementById('fileInput')?.click()}>
                                         <input id="fileInput" type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={(e) => e.target.files?.[0] && handleNewProject(e.target.files[0])} />
-                                        {isUploading ? <Loader2 className="w-16 h-16 text-indigo-500 animate-spin mx-auto" /> : <Upload className="w-16 h-16 text-slate-300 mx-auto mb-6 group-hover:text-indigo-400" />}
-                                        <p className="text-base font-bold text-slate-700">
-                                            {isFixingMissingFile ? 'Re-upload Source Dataset' : 'Select Source Dataset'}
-                                        </p>
-                                        <p className="text-xs text-slate-400 mt-3 uppercase font-black tracking-widest">
-                                            {isFixingMissingFile ? 'Links this lab back to a physical file' : 'Syncs to Local and Supabase Cloud'}
-                                        </p>
+                                        <Upload className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                                        <p className="font-bold text-slate-600">Click to upload Dataset</p>
                                     </div>
                                 </div>
                             </div>
                         )}
 
-                        {/* Error Boundary */}
                         {loadError ? (
-                            <div className="flex-1 flex flex-col items-center justify-center h-full p-10 text-center animate-in zoom-in-95 duration-500">
-                                <div className="w-28 h-28 bg-red-50 rounded-[2.5rem] flex items-center justify-center mb-8 border border-red-100 shadow-inner">
-                                    <AlertTriangle className="w-14 h-14 text-red-500" />
-                                </div>
-                                <h2 className="text-3xl font-black text-slate-800 mb-4 tracking-tighter uppercase">Startup Blocked</h2>
-                                <p className="text-slate-500 max-w-md mb-12 leading-relaxed font-medium text-lg">
-                                    {loadError.includes("API Key") ? "A Gemini API Key is required to power the Data Engineering AI." : loadError}
-                                </p>
-                                <div className="flex flex-wrap justify-center gap-5">
+                            <div className="h-full flex flex-col items-center justify-center text-center p-10">
+                                <AlertTriangle className="w-20 h-20 text-red-500 mb-6" />
+                                <h2 className="text-3xl font-black text-slate-800 mb-4 uppercase">Startup Blocked</h2>
+                                <p className="text-slate-500 max-w-md mb-8">{loadError}</p>
+                                <div className="flex gap-4">
                                     {needsKey ? (
-                                        <button onClick={handleOpenKeyDialog} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[1.5rem] font-bold shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95">
-                                            <Key className="w-6 h-6" /> CONNECT GEMINI API
+                                        <button onClick={handleOpenKeyDialog} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 flex items-center gap-2">
+                                            <Key className="w-5 h-5" /> CONNECT GEMINI API
                                         </button>
                                     ) : (
-                                        <button onClick={() => activeProject && startEngineForProject(activeProject)} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[1.5rem] font-bold shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95">
-                                            <RefreshCw className="w-6 h-6" /> AGGRESSIVE SYNC
+                                        <button onClick={() => activeProject && startEngineForProject(activeProject)} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 flex items-center gap-2">
+                                            <RefreshCw className="w-5 h-5" /> RETRY SYNC
                                         </button>
                                     )}
-                                    <button onClick={() => { setIsFixingMissingFile(true); setShowUpload(true); }} className="px-10 py-5 bg-white border border-slate-200 text-slate-600 rounded-[1.5rem] font-bold shadow-sm hover:bg-slate-50 transition-all">FIX BY RE-UPLOAD</button>
-                                    <button onClick={() => activeProject && handleDeleteProject(activeProject.id)} className="px-10 py-5 bg-slate-100 text-slate-400 rounded-[1.5rem] font-bold hover:bg-red-50 hover:text-red-500 transition-all">ABANDON LAB</button>
                                 </div>
-                                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="mt-8 text-[10px] text-slate-400 underline font-bold uppercase tracking-widest">Billing & Key Documentation</a>
                             </div>
                         ) : activeProject ? (
                             <Notebook 
@@ -382,27 +305,21 @@ const App: React.FC = () => {
                                 onDeleteCell={(id) => { const cells = activeProject.cells.filter(c => c.id !== id); setActiveProject({ ...activeProject, cells }); }} 
                                 onAddCell={(type) => { const newCell: NotebookCell = { id: `cell_${Date.now()}`, type, content: '', isExecuting: false }; setActiveProject({ ...activeProject, cells: [...activeProject.cells, newCell] }); }} 
                                 onGetSuggestion={() => startEngineForProject(activeProject, true)} 
-                                onExport={async (format) => { try { const bytes = await pyEngine.exportData(format); const blob = new Blob([bytes], { type: format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `cleaned_${activeProject.name.replace(/\.[^/.]+$/, "")}.${format}`; a.click(); } catch (e: any) { alert("Export failed"); } }} 
+                                onExport={async (format) => { try { const bytes = await pyEngine.exportData(format); const blob = new Blob([bytes], { type: format === 'csv' ? 'text/csv' : 'application/octet-stream' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `cleaned_${activeProject.name}.${format}`; a.click(); } catch (e: any) { alert("Export failed"); } }} 
                                 onSave={() => storage.saveProject(activeProject)} 
                                 onDeleteProject={handleDeleteProject} 
-                                onSaveCleanedToCloud={handleSaveCleanedToCloud}
                                 onOpenDashboard={async () => { setDashboardData([]); setShowDashboard(true); try { const fullData = await pyEngine.getFullData(); setDashboardData(fullData); } catch (err) { console.error("Dashboard failed"); } }} 
                             />
                         ) : (
-                            <div className="flex-1 flex flex-col items-center justify-center h-full text-slate-400">
-                                <div className="p-20 border-2 border-dashed border-slate-200 rounded-[4rem] text-center max-w-lg bg-white shadow-2xl shadow-slate-200/50">
-                                    <div className="w-32 h-32 bg-indigo-50 rounded-[3rem] flex items-center justify-center mb-10 mx-auto hover:rotate-6 transition-transform">
-                                        <Database className="w-16 h-16 text-indigo-400" />
-                                    </div>
-                                    <h3 className="text-slate-800 text-3xl font-black mb-4 tracking-tighter">Workspace Idle</h3>
-                                    <p className="text-base mb-12 text-slate-500 leading-relaxed px-10">Select an existing transformation lab or upload a raw file to initiate AI-powered Pandas engineering.</p>
-                                    <button onClick={() => setShowUpload(true)} className="w-full px-12 py-6 bg-indigo-600 text-white rounded-3xl shadow-2xl shadow-indigo-200 font-bold hover:bg-indigo-700 hover:-translate-y-1 transition-all active:translate-y-0 tracking-[0.15em] text-xs uppercase">START NEW WORKSPACE</button>
+                            <div className="h-full flex items-center justify-center">
+                                <div className="text-center p-20 bg-white rounded-[3rem] shadow-xl border border-slate-100">
+                                    <Database className="w-16 h-16 text-indigo-200 mx-auto mb-6" />
+                                    <h3 className="text-2xl font-black text-slate-800 mb-2">Workspace Idle</h3>
+                                    <p className="text-slate-400 mb-8">Select a project or upload a file to begin.</p>
+                                    <button onClick={() => setShowUpload(true)} className="px-10 py-5 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100">NEW LAB ENVIRONMENT</button>
                                 </div>
                             </div>
                         )}
-                        <button onClick={() => supabase.auth.signOut()} className="absolute bottom-6 right-6 p-4 bg-white border border-slate-200 rounded-full shadow-2xl text-slate-400 hover:text-red-500 transition-all hover:scale-110" title="Exit Laboratory">
-                            <LogOut className="w-7 h-7" />
-                        </button>
                     </main>
                     {showDashboard && activeProject && <Dashboard filename={activeProject.name} data={dashboardData} onClose={() => setShowDashboard(false)} />}
                 </>

@@ -20,11 +20,16 @@ export interface ChatMessage {
 }
 
 class GeminiService {
-  // Fix: Removed persistent instance and initialization logic to ensure fresh configuration per call
+  private getAI() {
+    const key = process.env.API_KEY;
+    if (!key) {
+        throw new Error("API Key is missing. Please click 'Connect Gemini API' to continue.");
+    }
+    return new GoogleGenAI({ apiKey: key });
+  }
 
   async generateFullPlan(summary: any): Promise<CleaningPlan> {
-    // Fix: Create a new GoogleGenAI instance right before making an API call
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = this.getAI();
 
     const prompt = `
       Dataset Analysis Summary:
@@ -33,7 +38,6 @@ class GeminiService {
       Based on this data, construct a perfect 10-row cleaning plan following the strict guidelines provided.
     `;
 
-    // Fix: Upgrade to 'gemini-3-pro-preview' for the complex task of generating data engineering plans
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
       contents: prompt,
@@ -62,48 +66,26 @@ class GeminiService {
       },
     });
 
-    const result = JSON.parse(response.text.trim());
-    if (result.steps.length !== 10) {
-        console.warn("AI generated plan with unexpected number of steps:", result.steps.length);
-    }
+    const text = response.text;
+    if (!text) throw new Error("AI returned an empty response.");
+    
+    const result = JSON.parse(text.trim());
     return result;
   }
 
   async solveError(code: string, error: string, summary: any, chatHistory: ChatMessage[]): Promise<ChatMessage> {
-    // Fix: Create a new GoogleGenAI instance right before making an API call
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = this.getAI();
 
-    const systemInstruction = `You are a world-class Python/Pandas debugging assistant (Copilot). 
-    The user is encountering an error in their notebook cell.
-    Analyze the code, the error message, and the dataset summary.
-    Provide a clear explanation of what went wrong and suggest corrected code.
-    
-    Respond in JSON format:
-    {
-      "explanation": "Brief explanation of the bug...",
-      "suggestedCode": "The complete fixed python code..."
-    }`;
+    const systemInstruction = `You are a world-class Python/Pandas debugging assistant. 
+    Analyze the code, error, and dataset context. Suggest fixed code in JSON format.`;
 
     const contents = [
       {
         role: 'user',
-        parts: [{ text: `
-          CODE:
-          ${code}
-          
-          ERROR:
-          ${error}
-          
-          DATASET CONTEXT:
-          ${JSON.stringify(summary, null, 2)}
-          
-          CHAT HISTORY:
-          ${JSON.stringify(chatHistory)}
-        `}]
+        parts: [{ text: `CODE: ${code}\nERROR: ${error}\nCONTEXT: ${JSON.stringify(summary)}` }]
       }
     ];
 
-    // Fix: Upgrade to 'gemini-3-pro-preview' for advanced reasoning during code debugging
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
       contents,
