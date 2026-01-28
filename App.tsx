@@ -9,7 +9,7 @@ import { storage, DatasetRecoveryResult } from './services/storageService';
 import { pyEngine } from './services/pyodideService';
 import { aiMentor } from './services/geminiService';
 import { supabase } from './services/supabaseClient';
-import { LogOut, Upload, FileText, Loader2, Sparkles, Database, CloudOff, AlertTriangle, RefreshCw, X } from 'lucide-react';
+import { LogOut, Upload, FileText, Loader2, Sparkles, Database, CloudOff, AlertTriangle, RefreshCw, X, Key } from 'lucide-react';
 
 const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
@@ -26,6 +26,43 @@ const App: React.FC = () => {
     const [isLocalMode, setIsLocalMode] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [isFixingMissingFile, setIsFixingMissingFile] = useState(false);
+    const [isKeyChecking, setIsKeyChecking] = useState(true);
+    const [needsKey, setNeedsKey] = useState(false);
+
+    // AI Key Check logic to handle missing process.env.API_KEY in browser
+    useEffect(() => {
+        const checkApiKey = async () => {
+            if (process.env.API_KEY) {
+                setNeedsKey(false);
+                setIsKeyChecking(false);
+                return;
+            }
+
+            // @ts-ignore
+            if (window.aistudio) {
+                // @ts-ignore
+                const hasKey = await window.aistudio.hasSelectedApiKey();
+                setNeedsKey(!hasKey);
+            } else {
+                setNeedsKey(!process.env.API_KEY);
+            }
+            setIsKeyChecking(false);
+        };
+        checkApiKey();
+    }, []);
+
+    const handleOpenKeyDialog = async () => {
+        // @ts-ignore
+        if (window.aistudio) {
+            // @ts-ignore
+            await window.aistudio.openSelectKey();
+            setNeedsKey(false);
+            setLoadError(null); // Clear errors after potentially fixing the key
+            if (activeProject) startEngineForProject(activeProject);
+        } else {
+            alert("This environment requires an API_KEY environment variable or the AI Studio key selector.");
+        }
+    };
 
     useEffect(() => {
         const init = async () => {
@@ -58,11 +95,9 @@ const App: React.FC = () => {
             await pyEngine.init();
             const datasetId = project.datasetId || project.id;
             
-            // Tiered Recovery Attempt
             const result: DatasetRecoveryResult | null = await storage.getDataset(datasetId, project.id, project.name);
             
             if (result) {
-                // HEALING: If recovered from a mismatching path, update metadata to prevent future errors
                 if (result.recoveredDatasetId && result.recoveredDatasetId !== project.datasetId) {
                     setAutoProgressMsg('Self-healing project pathing...');
                     const healedProject = { ...project, datasetId: result.recoveredDatasetId };
@@ -102,10 +137,14 @@ const App: React.FC = () => {
                 }
                 setAutoProgressMsg('');
             } else {
-                throw new Error(`The lab data source "${project.name}" is missing or unreachable. It may have been deleted from cloud storage.`);
+                throw new Error(`The lab data source "${project.name}" is missing or unreachable.`);
             }
         } catch (err: any) {
             console.error("Startup Failure:", err);
+            // Detect if the error is due to missing API Key
+            if (err.message.includes("API Key") || err.message.includes("key") || err.message.includes("found")) {
+                setNeedsKey(true);
+            }
             setLoadError(err.message);
             setIsEngineReady(true);
             setAutoProgressMsg('');
@@ -122,7 +161,7 @@ const App: React.FC = () => {
 
     const handleDeleteProject = async (id: string) => {
         const p = projects.find(proj => proj.id === id);
-        if (!p || !window.confirm(`PERMANENTLY ERASE LAB "${p.name}"? This action removes all local and cloud files associated with this project.`)) return;
+        if (!p || !window.confirm(`PERMANENTLY ERASE LAB "${p.name}"?`)) return;
 
         if (activeProject?.id === id) { 
             setActiveProject(null); 
@@ -146,7 +185,6 @@ const App: React.FC = () => {
         if (isUploading) return;
         setIsUploading(true);
 
-        // If fixing a project with missing data
         if (isFixingMissingFile && activeProject) {
             const newDatasetId = `data_${Date.now()}`;
             setAutoProgressMsg(`Recovering project using ${file.name}...`);
@@ -184,9 +222,9 @@ const App: React.FC = () => {
 
     const handleSaveCleanedToCloud = async () => {
         if (!activeProject || !summary) return;
-        if (!window.confirm("Overwrite existing cloud master with this transformed version?")) return;
+        if (!window.confirm("Overwrite existing cloud master?")) return;
         
-        setAutoProgressMsg('Syncing cleaned master to Supabase...');
+        setAutoProgressMsg('Syncing cleaned master...');
         try {
             const format = activeProject.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
             const blob = await pyEngine.getDfBlob(format);
@@ -198,7 +236,7 @@ const App: React.FC = () => {
             await storage.saveProject(updated);
             await loadProjects();
             
-            alert("Transformed version stored in Cloud Database.");
+            alert("Transformed version stored in Cloud.");
         } catch (err: any) {
             alert("Cloud sync failure: " + err.message);
         } finally {
@@ -237,6 +275,14 @@ const App: React.FC = () => {
         }
     };
 
+    if (isKeyChecking) {
+        return (
+            <div className="flex h-screen bg-slate-900 items-center justify-center">
+                <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+            </div>
+        );
+    }
+
     return (
         <div className="flex h-screen bg-slate-50 overflow-hidden font-inter">
             {!user ? ( <Auth onAuthSuccess={(u) => setUser({ email: u.email, id: u.id })} /> ) : (
@@ -245,7 +291,11 @@ const App: React.FC = () => {
                     <main className="flex-1 relative">
                         {/* Status Badges */}
                         <div className="absolute top-4 right-20 z-40 flex items-center gap-2">
-                            {isLocalMode ? (
+                            {needsKey ? (
+                                <button onClick={handleOpenKeyDialog} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 border border-red-200 text-red-600 rounded-full text-[10px] font-black shadow-sm hover:bg-red-100 transition-colors">
+                                    <Key className="w-3 h-3" /> AI DISCONNECTED
+                                </button>
+                            ) : isLocalMode ? (
                                 <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-600 rounded-full text-[10px] font-black shadow-sm">
                                     <CloudOff className="w-3 h-3" /> LOCAL ONLY
                                 </div>
@@ -303,12 +353,23 @@ const App: React.FC = () => {
                                     <AlertTriangle className="w-14 h-14 text-red-500" />
                                 </div>
                                 <h2 className="text-3xl font-black text-slate-800 mb-4 tracking-tighter uppercase">Startup Blocked</h2>
-                                <p className="text-slate-500 max-w-md mb-12 leading-relaxed font-medium text-lg">{loadError}</p>
+                                <p className="text-slate-500 max-w-md mb-12 leading-relaxed font-medium text-lg">
+                                    {loadError.includes("API Key") ? "A Gemini API Key is required to power the Data Engineering AI." : loadError}
+                                </p>
                                 <div className="flex flex-wrap justify-center gap-5">
-                                    <button onClick={() => activeProject && startEngineForProject(activeProject)} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[1.5rem] font-bold shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95"><RefreshCw className="w-6 h-6" /> AGGRESSIVE SYNC</button>
+                                    {needsKey ? (
+                                        <button onClick={handleOpenKeyDialog} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[1.5rem] font-bold shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95">
+                                            <Key className="w-6 h-6" /> CONNECT GEMINI API
+                                        </button>
+                                    ) : (
+                                        <button onClick={() => activeProject && startEngineForProject(activeProject)} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[1.5rem] font-bold shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95">
+                                            <RefreshCw className="w-6 h-6" /> AGGRESSIVE SYNC
+                                        </button>
+                                    )}
                                     <button onClick={() => { setIsFixingMissingFile(true); setShowUpload(true); }} className="px-10 py-5 bg-white border border-slate-200 text-slate-600 rounded-[1.5rem] font-bold shadow-sm hover:bg-slate-50 transition-all">FIX BY RE-UPLOAD</button>
                                     <button onClick={() => activeProject && handleDeleteProject(activeProject.id)} className="px-10 py-5 bg-slate-100 text-slate-400 rounded-[1.5rem] font-bold hover:bg-red-50 hover:text-red-500 transition-all">ABANDON LAB</button>
                                 </div>
+                                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="mt-8 text-[10px] text-slate-400 underline font-bold uppercase tracking-widest">Billing & Key Documentation</a>
                             </div>
                         ) : activeProject ? (
                             <Notebook 
