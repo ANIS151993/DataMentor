@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { Project, DatasetMetadata } from '../types';
+import { Project, User } from '../types';
 import { storage, CloudFile } from '../services/storageService';
-import { FileText, Plus, Trash2, FolderOpen, Database, BarChart3, Cloud, HardDrive, Loader2, RefreshCw, Zap, Sparkles, CloudOff } from 'lucide-react';
+import { FileText, Plus, Trash2, FolderOpen, Database, BarChart3, Cloud, HardDrive, Loader2, RefreshCw, Zap, Sparkles, CloudOff, LogOut, User as UserIcon } from 'lucide-react';
 
 interface SidebarProps {
     projects: Project[];
@@ -13,6 +13,8 @@ interface SidebarProps {
     summary: any;
     needsKey: boolean;
     onToggleKeyAssistant: () => void;
+    onLogout: () => void;
+    user: User | null;
 }
 
 const Logo = () => (
@@ -23,7 +25,7 @@ const Logo = () => (
     </div>
 );
 
-const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectProject, onDeleteProject, onNewProject, summary, needsKey, onToggleKeyAssistant }) => {
+const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectProject, onDeleteProject, onNewProject, summary, needsKey, onToggleKeyAssistant, onLogout, user }) => {
     const [view, setView] = useState<'files' | 'explorer' | 'cloud'>('files');
     const [cloudFiles, setCloudFiles] = useState<CloudFile[]>([]);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -190,7 +192,29 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
                 )}
             </div>
 
-            <div className="p-5 bg-slate-50 border-t border-slate-200 space-y-3">
+            <div className="p-5 bg-slate-50 border-t border-slate-200 space-y-4">
+                {/* User Profile & Logout */}
+                {user && (
+                    <div className="flex items-center justify-between px-2 mb-2">
+                        <div className="flex items-center gap-2 truncate">
+                            <div className="w-7 h-7 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center shrink-0">
+                                <UserIcon className="w-4 h-4" />
+                            </div>
+                            <div className="flex flex-col truncate">
+                                <span className="text-[10px] font-black text-slate-700 truncate">{user.email.split('@')[0]}</span>
+                                <span className="text-[8px] text-slate-400 truncate tracking-tight">{user.email}</span>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={onLogout}
+                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                            title="Sign Out"
+                        >
+                            <LogOut className="w-4 h-4" />
+                        </button>
+                    </div>
+                )}
+
                 <button 
                     onClick={onToggleKeyAssistant}
                     className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all ${needsKey ? 'bg-red-50 border-red-200 text-red-600 animate-pulse' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}
@@ -202,11 +226,11 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
                     <div className={`w-2 h-2 rounded-full ${needsKey ? 'bg-red-500' : 'bg-emerald-500'}`} />
                 </button>
 
-                <div className="text-center">
+                <div className="text-center pt-2">
                     <div className="text-[9px] text-slate-400 font-black uppercase tracking-widest flex items-center justify-center gap-2">
                         <Database className="w-3 h-3" /> Core: 2.5 Pro Engine
                     </div>
-                    <div className="text-[8px] text-slate-300 font-bold uppercase tracking-tighter">
+                    <div className="text-[8px] text-slate-300 font-bold uppercase tracking-tighter mt-1">
                         © {new Date().getFullYear()} Md Anisur Rahman Chowdhury
                     </div>
                 </div>

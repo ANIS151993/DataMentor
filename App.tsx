@@ -93,6 +93,13 @@ const App: React.FC = () => {
         if (user) loadProjects();
     }, [user, loadProjects]);
 
+    const handleLogout = async () => {
+        await supabase.auth.signOut();
+        setUser(null);
+        setProjects([]);
+        setActiveProject(null);
+    };
+
     const startEngineForProject = async (project: Project, isNew: boolean = false) => {
         setIsEngineReady(false);
         setSummary(null);
@@ -120,7 +127,6 @@ const App: React.FC = () => {
                 setIsEngineReady(true);
                 
                 if (isNew) {
-                    // Only run AI generation if we have a key
                     const hasKey = await checkApiKeyStatus();
                     if (hasKey) {
                         setIsSuggesting(true);
@@ -136,7 +142,6 @@ const App: React.FC = () => {
                         await storage.saveProject(updated);
                         setIsSuggesting(false);
                     } else {
-                        // If no key, just provide a default code cell to get started
                         const defaultCell: NotebookCell = { id: `c_${Date.now()}`, type: 'code', content: '# Write your pandas code here\nprint(df.head())', isExecuting: false };
                         const updated = { ...project, cells: [defaultCell] };
                         setActiveProject(updated);
@@ -162,7 +167,6 @@ const App: React.FC = () => {
         }
     };
 
-    // Fix: Implement missing handleDeleteProject function
     const handleDeleteProject = async (id: string) => {
         const p = projects.find(proj => proj.id === id);
         try {
@@ -255,9 +259,10 @@ const App: React.FC = () => {
                         summary={summary} 
                         needsKey={needsKey}
                         onToggleKeyAssistant={() => setShowKeyAssistant(!showKeyAssistant)}
+                        onLogout={handleLogout}
+                        user={user}
                     />
                     <main className="flex-1 relative">
-                        {/* Key Assistant Modal Overlay */}
                         {(showKeyAssistant || (needsKey && isSuggesting)) && (
                             <div className="absolute inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6">
                                 <div className="max-w-xl w-full bg-white rounded-[2rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
