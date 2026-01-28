@@ -9,7 +9,7 @@ import { storage, DatasetRecoveryResult } from './services/storageService';
 import { pyEngine } from './services/pyodideService';
 import { aiMentor } from './services/geminiService';
 import { supabase } from './services/supabaseClient';
-import { LogOut, Upload, FileText, Loader2, Sparkles, Database, CloudOff, AlertTriangle, RefreshCw, X, Key, Info, ExternalLink } from 'lucide-react';
+import { LogOut, Upload, FileText, Loader2, Sparkles, Database, CloudOff, AlertTriangle, RefreshCw, X, Key, Info, ExternalLink, Settings } from 'lucide-react';
 
 const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
@@ -23,19 +23,17 @@ const App: React.FC = () => {
     const [showDashboard, setShowDashboard] = useState(false);
     const [dashboardData, setDashboardData] = useState<any[]>([]);
     const [autoProgressMsg, setAutoProgressMsg] = useState('');
-    const [isLocalMode, setIsLocalMode] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [isKeyChecking, setIsKeyChecking] = useState(true);
     const [needsKey, setNeedsKey] = useState(false);
+    const [showKeyAssistant, setShowKeyAssistant] = useState(false);
 
-    // Robust check for API Key presence
     const checkApiKeyStatus = useCallback(async () => {
         const envKey = process.env.API_KEY;
         if (envKey && envKey !== 'undefined' && envKey !== 'null' && envKey.length > 5) {
             setNeedsKey(false);
             return true;
         }
-
         // @ts-ignore
         if (window.aistudio) {
             try {
@@ -48,7 +46,6 @@ const App: React.FC = () => {
                 return false;
             }
         }
-
         setNeedsKey(true);
         return false;
     }, []);
@@ -63,13 +60,14 @@ const App: React.FC = () => {
             try {
                 // @ts-ignore
                 await window.aistudio.openSelectKey();
-                // Instructions dictate we assume success to avoid race conditions
                 setNeedsKey(false);
-                setLoadError(null);
+                setShowKeyAssistant(false);
                 if (activeProject) startEngineForProject(activeProject);
             } catch (e) {
                 console.error("Key selection failed", e);
             }
+        } else {
+            setShowKeyAssistant(true);
         }
     };
 
@@ -107,7 +105,6 @@ const App: React.FC = () => {
             const result: DatasetRecoveryResult | null = await storage.getDataset(datasetId, project.id, project.name);
             
             if (result) {
-                setIsLocalMode(result.isLocal);
                 setAutoProgressMsg(`Mounting dataset: ${result.name}...`);
                 await pyEngine.loadFile(result.data, result.name || project.name);
                 
@@ -123,31 +120,35 @@ const App: React.FC = () => {
                 setIsEngineReady(true);
                 
                 if (isNew) {
-                    setIsSuggesting(true);
-                    setAutoProgressMsg('AI is architecting cleaning plan...');
-                    const plan = await aiMentor.generateFullPlan(currentSummary);
-                    const newCells: NotebookCell[] = [{ id: `h_${Date.now()}`, type: 'markdown', content: `# ${plan.plan_title}\n\nAutomated Roadmap Initialized.`, metadata: { isAI: true } }];
-                    plan.steps.forEach((step, idx) => {
-                        newCells.push({ id: `m_${idx}_${Date.now()}`, type: 'markdown', content: `## ${step.step_name}\n${step.explanation}`, metadata: { isAI: true } });
-                        newCells.push({ id: `c_${idx}_${Date.now()}`, type: 'code', content: step.code, metadata: { isAI: true } });
-                    });
-                    const updated = { ...project, cells: newCells };
-                    setActiveProject(updated);
-                    await storage.saveProject(updated);
-                    setIsSuggesting(false);
+                    // Only run AI generation if we have a key
+                    const hasKey = await checkApiKeyStatus();
+                    if (hasKey) {
+                        setIsSuggesting(true);
+                        setAutoProgressMsg('AI is architecting cleaning plan...');
+                        const plan = await aiMentor.generateFullPlan(currentSummary);
+                        const newCells: NotebookCell[] = [{ id: `h_${Date.now()}`, type: 'markdown', content: `# ${plan.plan_title}\n\nAutomated Roadmap Initialized.`, metadata: { isAI: true } }];
+                        plan.steps.forEach((step, idx) => {
+                            newCells.push({ id: `m_${idx}_${Date.now()}`, type: 'markdown', content: `## ${step.step_name}\n${step.explanation}`, metadata: { isAI: true } });
+                            newCells.push({ id: `c_${idx}_${Date.now()}`, type: 'code', content: step.code, metadata: { isAI: true } });
+                        });
+                        const updated = { ...project, cells: newCells };
+                        setActiveProject(updated);
+                        await storage.saveProject(updated);
+                        setIsSuggesting(false);
+                    } else {
+                        // If no key, just provide a default code cell to get started
+                        const defaultCell: NotebookCell = { id: `c_${Date.now()}`, type: 'code', content: '# Write your pandas code here\nprint(df.head())', isExecuting: false };
+                        const updated = { ...project, cells: [defaultCell] };
+                        setActiveProject(updated);
+                        await storage.saveProject(updated);
+                    }
                 }
                 setAutoProgressMsg('');
             } else {
                 throw new Error(`Data source "${project.name}" not found.`);
             }
         } catch (err: any) {
-            const msg = err.message || '';
-            if (msg.toLowerCase().includes("key") || msg.toLowerCase().includes("api")) {
-                setNeedsKey(true);
-                setLoadError("AI Authentication Failed");
-            } else {
-                setLoadError(err.message);
-            }
+            setLoadError(err.message);
             setIsEngineReady(true);
             setAutoProgressMsg('');
         }
@@ -161,12 +162,19 @@ const App: React.FC = () => {
         }
     };
 
+    // Fix: Implement missing handleDeleteProject function
     const handleDeleteProject = async (id: string) => {
         const p = projects.find(proj => proj.id === id);
-        if (!p || !window.confirm(`Delete Lab "${p.name}"?`)) return;
-        if (activeProject?.id === id) { setActiveProject(null); setSummary(null); }
-        await storage.deleteProject(id, p.datasetId);
-        await loadProjects();
+        try {
+            await storage.deleteProject(id, p?.datasetId);
+            await loadProjects();
+            if (activeProject?.id === id) {
+                setActiveProject(null);
+                setSummary(null);
+            }
+        } catch (err: any) {
+            alert("Delete failed: " + err.message);
+        }
     };
 
     const handleRunCell = async (cellId: string) => {
@@ -229,10 +237,7 @@ const App: React.FC = () => {
     if (isKeyChecking) {
         return (
             <div className="flex h-screen bg-slate-900 items-center justify-center">
-                <div className="text-center">
-                    <Loader2 className="w-12 h-12 text-indigo-500 animate-spin mx-auto mb-4" />
-                    <p className="text-indigo-200 text-xs font-bold uppercase tracking-widest">Handshaking with Gemini...</p>
-                </div>
+                <Loader2 className="w-12 h-12 text-indigo-500 animate-spin" />
             </div>
         );
     }
@@ -241,73 +246,56 @@ const App: React.FC = () => {
         <div className="flex h-screen bg-slate-50 overflow-hidden font-inter">
             {!user ? ( <Auth onAuthSuccess={(u) => setUser({ email: u.email, id: u.id })} /> ) : (
                 <>
-                    <Sidebar projects={projects} activeProjectId={activeProject?.id || null} onSelectProject={handleSelectProject} onDeleteProject={handleDeleteProject} onNewProject={() => { setShowUpload(true); setLoadError(null); }} summary={summary} />
+                    <Sidebar 
+                        projects={projects} 
+                        activeProjectId={activeProject?.id || null} 
+                        onSelectProject={handleSelectProject} 
+                        onDeleteProject={handleDeleteProject} 
+                        onNewProject={() => { setShowUpload(true); setLoadError(null); }} 
+                        summary={summary} 
+                        needsKey={needsKey}
+                        onToggleKeyAssistant={() => setShowKeyAssistant(!showKeyAssistant)}
+                    />
                     <main className="flex-1 relative">
-                        {/* Connection Status Bar */}
-                        <div className="absolute top-4 right-8 z-40 flex items-center gap-2">
-                            {needsKey ? (
-                                <div className="flex items-center gap-2 px-4 py-2 bg-red-50 border border-red-200 text-red-600 rounded-full text-[10px] font-black shadow-lg">
-                                    <CloudOff className="w-3 h-3" /> AI DISCONNECTED
-                                </div>
-                            ) : (
-                                <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-200 text-emerald-600 rounded-full text-[10px] font-black shadow-sm">
-                                    <Sparkles className="w-3 h-3" /> AI ENGINE READY
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Setup Assistant for Disconnected state */}
-                        {needsKey && (
-                            <div className="absolute inset-0 z-50 bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-6">
-                                <div className="max-w-2xl w-full bg-white rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-500">
-                                    <div className="bg-indigo-600 p-10 text-white relative">
-                                        <div className="absolute top-0 right-0 p-12 opacity-10">
-                                            <Key className="w-48 h-48 rotate-12" />
+                        {/* Key Assistant Modal Overlay */}
+                        {(showKeyAssistant || (needsKey && isSuggesting)) && (
+                            <div className="absolute inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6">
+                                <div className="max-w-xl w-full bg-white rounded-[2rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+                                    <div className="bg-indigo-600 p-8 text-white flex justify-between items-start">
+                                        <div>
+                                            <h2 className="text-2xl font-black mb-1">AI Features Disabled</h2>
+                                            <p className="text-indigo-100 text-sm">To use automated planning, connect a Gemini API Key.</p>
                                         </div>
-                                        <h2 className="text-4xl font-black mb-2 italic">Connection Required</h2>
-                                        <p className="text-indigo-100 font-medium">To enable automated data engineering, we need a Gemini API Key.</p>
+                                        <button onClick={() => { setShowKeyAssistant(false); setIsSuggesting(false); }} className="p-2 hover:bg-white/20 rounded-full"><X className="w-5 h-5"/></button>
                                     </div>
-                                    <div className="p-10 space-y-8">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                            {/* Option 1: AI Studio */}
+                                    <div className="p-8 space-y-6">
+                                        <div className="grid grid-cols-1 gap-4">
                                             {/* @ts-ignore */}
-                                            {window.aistudio ? (
-                                                <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 flex flex-col items-start">
-                                                    <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
-                                                        <Sparkles className="w-5 h-5" />
+                                            {window.aistudio && (
+                                                <button onClick={handleOpenKeyDialog} className="w-full p-6 bg-slate-50 border border-slate-200 rounded-2xl text-left hover:border-indigo-500 transition-all flex items-center gap-4 group">
+                                                    <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                                                        <Key className="w-6 h-6" />
                                                     </div>
-                                                    <h3 className="font-bold text-slate-800 mb-2">Native Connector</h3>
-                                                    <p className="text-xs text-slate-500 mb-6 leading-relaxed">You are in a supported AI Studio environment. Connect your paid API key directly.</p>
-                                                    <button onClick={handleOpenKeyDialog} className="mt-auto w-full py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-100">
-                                                        <Key className="w-3 h-3" /> CONNECT NOW
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 flex flex-col items-start opacity-50">
-                                                    <div className="w-10 h-10 bg-slate-200 text-slate-400 rounded-xl flex items-center justify-center mb-4">
-                                                        <Sparkles className="w-5 h-5" />
+                                                    <div>
+                                                        <div className="font-bold text-slate-800">Use Native AI Studio Key</div>
+                                                        <div className="text-xs text-slate-500">Connect your paid key from Google directly.</div>
                                                     </div>
-                                                    <h3 className="font-bold text-slate-400 mb-2">Native Connector</h3>
-                                                    <p className="text-xs text-slate-400 mb-2">Not available in this environment.</p>
-                                                </div>
+                                                </button>
                                             )}
-
-                                            {/* Option 2: Environment Variables */}
-                                            <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 flex flex-col items-start">
-                                                <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center mb-4">
-                                                    <Database className="w-5 h-5" />
+                                            <div className="p-6 bg-slate-50 border border-slate-200 rounded-2xl flex items-center gap-4">
+                                                <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center">
+                                                    <Settings className="w-6 h-6" />
                                                 </div>
-                                                <h3 className="font-bold text-slate-800 mb-2">Cloud Environment</h3>
-                                                <p className="text-xs text-slate-500 mb-6 leading-relaxed">Using Vercel or Netlify? Set your <code className="bg-slate-200 px-1 rounded">API_KEY</code> variable in the dashboard.</p>
-                                                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="mt-auto w-full py-3 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100 transition-all flex items-center justify-center gap-2">
-                                                    <ExternalLink className="w-3 h-3" /> GET API KEY
-                                                </a>
+                                                <div>
+                                                    <div className="font-bold text-slate-800">Cloud Variable (Vercel/Netlify)</div>
+                                                    <div className="text-xs text-slate-500">Set <code className="bg-slate-200 px-1 rounded font-mono">API_KEY</code> in your deployment dashboard.</div>
+                                                </div>
                                             </div>
                                         </div>
-                                        <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex items-start gap-3">
+                                        <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 flex items-start gap-3">
                                             <Info className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-                                            <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
-                                                Note: To use Gemini 3.0 Pro, Google requires a **Paid API Key** from a billing-enabled GCP project. Free-tier keys may cause connection errors in production environments.
+                                            <p className="text-[10px] text-amber-800 leading-relaxed">
+                                                Note: Gemini 3.0 Pro requires a **Paid API Key**. Free-tier keys are limited and may fail in production.
                                             </p>
                                         </div>
                                     </div>
@@ -338,26 +326,18 @@ const App: React.FC = () => {
                             </div>
                         )}
 
-                        {loadError && !needsKey ? (
-                            <div className="h-full flex flex-col items-center justify-center text-center p-10">
-                                <AlertTriangle className="w-20 h-20 text-red-500 mb-6" />
-                                <h2 className="text-3xl font-black text-slate-800 mb-4 uppercase">System Error</h2>
-                                <p className="text-slate-500 max-w-md mb-8">{loadError}</p>
-                                <button onClick={() => activeProject && startEngineForProject(activeProject)} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 flex items-center gap-2">
-                                    <RefreshCw className="w-5 h-5" /> RESTART ENGINE
-                                </button>
-                            </div>
-                        ) : activeProject ? (
+                        {activeProject ? (
                             <Notebook 
                                 project={activeProject} 
                                 isInitializing={!isEngineReady} 
                                 isSuggesting={isSuggesting} 
                                 summary={summary} 
+                                needsKey={needsKey}
                                 onUpdateCell={(id, content) => { const cells = activeProject.cells.map(c => c.id === id ? { ...c, content } : c); setActiveProject({ ...activeProject, cells }); }} 
                                 onRunCell={handleRunCell} 
                                 onDeleteCell={(id) => { const cells = activeProject.cells.filter(c => c.id !== id); setActiveProject({ ...activeProject, cells }); }} 
                                 onAddCell={(type) => { const newCell: NotebookCell = { id: `cell_${Date.now()}`, type, content: '', isExecuting: false }; setActiveProject({ ...activeProject, cells: [...activeProject.cells, newCell] }); }} 
-                                onGetSuggestion={() => startEngineForProject(activeProject, true)} 
+                                onGetSuggestion={() => needsKey ? setShowKeyAssistant(true) : startEngineForProject(activeProject, true)} 
                                 onExport={async (format) => { try { const bytes = await pyEngine.exportData(format); const blob = new Blob([bytes], { type: format === 'csv' ? 'text/csv' : 'application/octet-stream' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `cleaned_${activeProject.name}.${format}`; a.click(); } catch (e: any) { alert("Export failed"); } }} 
                                 onSave={() => storage.saveProject(activeProject)} 
                                 onDeleteProject={handleDeleteProject} 

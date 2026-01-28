@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Project, DatasetMetadata } from '../types';
 import { storage, CloudFile } from '../services/storageService';
-import { FileText, Plus, Trash2, FolderOpen, Database, BarChart3, Cloud, HardDrive, Loader2, RefreshCw, Zap } from 'lucide-react';
+import { FileText, Plus, Trash2, FolderOpen, Database, BarChart3, Cloud, HardDrive, Loader2, RefreshCw, Zap, Sparkles, CloudOff } from 'lucide-react';
 
 interface SidebarProps {
     projects: Project[];
@@ -11,6 +11,8 @@ interface SidebarProps {
     onDeleteProject: (id: string) => void;
     onNewProject: () => void;
     summary: any;
+    needsKey: boolean;
+    onToggleKeyAssistant: () => void;
 }
 
 const Logo = () => (
@@ -21,7 +23,7 @@ const Logo = () => (
     </div>
 );
 
-const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectProject, onDeleteProject, onNewProject, summary }) => {
+const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectProject, onDeleteProject, onNewProject, summary, needsKey, onToggleKeyAssistant }) => {
     const [view, setView] = useState<'files' | 'explorer' | 'cloud'>('files');
     const [cloudFiles, setCloudFiles] = useState<CloudFile[]>([]);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -43,16 +45,6 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
             refreshCloudFiles();
         }
     }, [view]);
-
-    const handleDeleteCloudFile = async (path: string) => {
-        if (!window.confirm("Permanently delete this raw data file from Supabase? This cannot be undone.")) return;
-        try {
-            await storage.deleteStorageFile(path);
-            refreshCloudFiles();
-        } catch (e) {
-            alert("Failed to delete file from cloud.");
-        }
-    };
 
     return (
         <aside className="w-80 flex flex-col border-r border-slate-200 h-screen bg-white">
@@ -151,13 +143,6 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
                                                 <span className="text-[10px] text-slate-400 font-medium">{(file.size / 1024).toFixed(1)} KB</span>
                                             </div>
                                         </div>
-                                        <button 
-                                            onClick={() => handleDeleteCloudFile(file.path)}
-                                            className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-white rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                                            title="Delete Raw File from Cloud"
-                                        >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
                                     </div>
                                 </div>
                             ))
@@ -195,12 +180,6 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
                                                     <span className="text-xs font-bold text-slate-700 truncate">{col}</span>
                                                     <span className="text-[9px] px-2 py-0.5 bg-slate-100 rounded-full text-slate-500 font-black uppercase">{summary.dtypes[col]}</span>
                                                 </div>
-                                                {summary.missing[col] > 0 && (
-                                                    <div className="flex items-center gap-1.5 text-amber-600 text-[10px] font-bold">
-                                                        <div className="w-1 h-1 rounded-full bg-amber-500" />
-                                                        {summary.missing[col]} NULLS DETECTED
-                                                    </div>
-                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -211,12 +190,25 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, activeProjectId, onSelectPr
                 )}
             </div>
 
-            <div className="p-5 bg-slate-50 border-t border-slate-200 text-center space-y-1">
-                <div className="text-[9px] text-slate-400 font-black uppercase tracking-widest flex items-center justify-center gap-2">
-                    <Database className="w-3 h-3" /> Core: 2.5 Pro Engine
-                </div>
-                <div className="text-[8px] text-slate-300 font-bold uppercase tracking-tighter">
-                    © {new Date().getFullYear()} Md Anisur Rahman Chowdhury
+            <div className="p-5 bg-slate-50 border-t border-slate-200 space-y-3">
+                <button 
+                    onClick={onToggleKeyAssistant}
+                    className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all ${needsKey ? 'bg-red-50 border-red-200 text-red-600 animate-pulse' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}
+                >
+                    <div className="flex items-center gap-2">
+                        {needsKey ? <CloudOff className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+                        <span className="text-[10px] font-black uppercase tracking-widest">AI {needsKey ? 'Setup' : 'Engine'}</span>
+                    </div>
+                    <div className={`w-2 h-2 rounded-full ${needsKey ? 'bg-red-500' : 'bg-emerald-500'}`} />
+                </button>
+
+                <div className="text-center">
+                    <div className="text-[9px] text-slate-400 font-black uppercase tracking-widest flex items-center justify-center gap-2">
+                        <Database className="w-3 h-3" /> Core: 2.5 Pro Engine
+                    </div>
+                    <div className="text-[8px] text-slate-300 font-bold uppercase tracking-tighter">
+                        © {new Date().getFullYear()} Md Anisur Rahman Chowdhury
+                    </div>
                 </div>
             </div>
         </aside>
